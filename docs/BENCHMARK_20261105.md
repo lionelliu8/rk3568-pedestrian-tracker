@@ -58,3 +58,30 @@ cd ~/npu3/yolo26_work
 ~/rknn_venv/bin/python ~/npu3/yolov5_deepsort_rknn/tools/benchmark/score_mot.py track mot17 \
     board/results/tracks --min-visibility 0.5
 ```
+
+## 补充：YOLO11n、YOLO26n 一对多检测头、sigmoid 注意力（2026-11-05）
+
+同样的数据和打分口径（可见 ≥50%，召回率和精度取置信度 0.25 时的值）：
+
+| 模型 | NPU ms/帧（Python） | AP50 可见≥50% | AP50 全部 | 召回率 | 精度 |
+|---|---|---|---|---|---|
+| YOLOv5s-relu（旧） | 77.6 | 0.795 | 0.492 | 0.774 | 0.757 |
+| YOLOv8n | 62.0 | 0.750 | 0.456 | 0.709 | 0.782 |
+| **YOLO11n** | 74.4 | **0.797** | **0.501** | 0.763 | 0.746 |
+| YOLO26n（一对一检测头，当前用的） | 84.2 | 0.772 | 0.466 | 0.697 | **0.884** |
+| YOLO26n（一对多检测头 + NMS） | 83.6 | 0.780 | 0.487 | 0.743 | 0.770 |
+
+- YOLO11n 是 n 尺寸里 AP 最高的。它也有 1 个注意力 Softmax 在 CPU 上执行（YOLO26n 有 2 个）。
+- YOLO26n 的一对一检测头不需要 NMS，误检最少，但在人挤人的场景里漏检更多。换成一对多检测头后，召回率从 0.70 升到 0.74。
+
+逐层耗时（`tests/rknn_perf`，跑 5 次，全零输入）：
+
+| 模型 | 注意力部分 | 总算子时间 |
+|---|---|---|
+| YOLO26n 原版 | 2 个 Softmax 在 CPU 上：42.7 ms | 92.0 ms |
+| YOLO26n sigmoid 注意力（未训练，只测速度） | 2 个 Sigmoid 在 NPU 上：1.2 ms | 56.8 ms |
+
+不开逐层统计实测（Python）：84.2 → 61.9 ms/帧。
+其他尝试过的写法：手写 exp/max/sum、转置后对通道维做 softmax，都会被 RKNN 重新合并成 CPU Softmax；
+用 sigmoid 换算 exp 再求和，因为注意力分数最大到约 17，exp 在量化时溢出成 NaN。
+所以要让注意力完全在 NPU 上运行，只能改成 sigmoid 注意力，然后重新训练（微调）。
