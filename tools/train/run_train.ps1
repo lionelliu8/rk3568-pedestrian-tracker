@@ -1,5 +1,5 @@
 # Training PC launcher (run via the scheduled task "pedestrian_train" so it survives ssh logout).
-param($Data, $Name, $Model = 'yolo26n_person_init.pt', $Attention = 'sigmoid', $Epochs = 100, $Batch = 32, $Fraction = 1.0, $Cache = ram)
+param($Data, $Name, $Model = 'yolo26n_person_init.pt', $Attention = 'sigmoid', $Epochs = 100, $Batch = 32, $Fraction = 1.0, $Cache = 'ram')
 Set-Location $PSScriptRoot
 $env:PYTHONIOENCODING = 'utf-8'
 New-Item -ItemType Directory -Force logs | Out-Null
