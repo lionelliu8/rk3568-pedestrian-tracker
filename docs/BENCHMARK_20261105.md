@@ -85,3 +85,16 @@ cd ~/npu3/yolo26_work
 其他尝试过的写法：手写 exp/max/sum、转置后对通道维做 softmax，都会被 RKNN 重新合并成 CPU Softmax；
 用 sigmoid 换算 exp 再求和，因为注意力分数最大到约 17，exp 在量化时溢出成 NaN。
 所以要让注意力完全在 NPU 上运行，只能改成 sigmoid 注意力，然后重新训练（微调）。
+
+## 补充：纯 NPU 部分对比，以及 FP16 对照（`tests/rknn_perf`，跑 5 次）
+
+| 模型 | 注意力 Softmax（CPU） | 其余部分（NPU） | 合计 |
+|---|---|---|---|
+| YOLO26n INT8 | 2 个，36.8 ms | 47.2 ms | 84.0 ms |
+| YOLO11n INT8 | 1 个，13.1 ms | 44.9 ms | 58.0 ms |
+| YOLOv8n INT8 | 无 | 48.0 ms | 48.0 ms |
+| YOLO26n FP16（不量化） | 2 个，仍在 CPU 上，53.8 ms | 107.1 ms | 160.9 ms |
+
+- 三个模型在 NPU 上的部分耗时差不多（45–48 ms），速度差异几乎全部来自 CPU 上的 Softmax 个数。
+- FP16 下 Softmax 仍然在 CPU 上，说明原因是 RK3568 NPU 不支持这个算子，和量化无关。
+- 带 DFL 的模型（v8/11）在 CPU 上解码更慢：Python 后处理 YOLO11n 29.9 ms，YOLO26n 17.5 ms。
