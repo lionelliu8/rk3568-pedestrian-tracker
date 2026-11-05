@@ -25,6 +25,7 @@ def main():
     p.add_argument("--name", required=True)
     p.add_argument("--device", default="0")
     p.add_argument("--workers", type=int, default=0)  # Windows + ROCm: in-process loading is the stable choice
+    p.add_argument("--cache", default="ram", help="ram / disk / none: cache decoded images between epochs")
     p.add_argument("--fraction", type=float, default=1.0, help="use part of the training set (smoke tests)")
     a = p.parse_args()
 
@@ -32,7 +33,8 @@ def main():
     from ultralytics import YOLO
     results = YOLO(a.model).train(
         data=a.data, epochs=a.epochs, imgsz=a.imgsz, batch=a.batch, device=a.device, workers=a.workers,
-        project=os.path.abspath("runs"), name=a.name, exist_ok=False, fraction=a.fraction, patience=30, plots=True)
+        project=os.path.abspath("runs"), name=a.name, exist_ok=False, fraction=a.fraction, patience=30, plots=True,
+        cache=False if a.cache == "none" else a.cache)
     print("TRAIN_DONE", getattr(results, "save_dir", ""), flush=True)
 
 
