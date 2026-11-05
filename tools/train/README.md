@@ -3,6 +3,10 @@
 把本目录的文件和 `tools/export_yolo26_onnx.py` 拷到训练机的 `D:\pedestrian_train\`（放在同一个目录里），
 Python 环境用 `D:\bitpose_train\venv`（ultralytics 8.4）。
 
+0. 准备数据（在服务器或虚拟机上执行，然后把结果拷到训练机）：
+   `prepare_crowdhuman.py <CrowdHuman目录> <输出目录>`，使用全身框，验证集取 1000 张；
+   `prepare_mot17.py <输出目录> MOT17-04 MOT17-10 MOT17-11 MOT17-13`，每 3 帧取 1 帧，不能加入测试用的 02/05/09。
+   两份数据都只允许非商业研究使用，CrowdHuman 的图片不能再分发，不要提交到 git。
 1. 生成单类别（行人）初始模型，分类层直接复用 COCO 的 person 权重：
    `python make_person_model.py yolo26n.pt yolo26n_person_init.pt`
    未训练时在 coco128 的行人上 mAP50 = 0.70，说明权重复制正确。
