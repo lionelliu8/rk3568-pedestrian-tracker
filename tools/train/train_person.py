@@ -32,7 +32,7 @@ def main():
     from ultralytics import YOLO
     results = YOLO(a.model).train(
         data=a.data, epochs=a.epochs, imgsz=a.imgsz, batch=a.batch, device=a.device, workers=a.workers,
-        project="runs", name=a.name, exist_ok=False, fraction=a.fraction, patience=30, plots=True)
+        project=os.path.abspath("runs"), name=a.name, exist_ok=False, fraction=a.fraction, patience=30, plots=True)
     print("TRAIN_DONE", getattr(results, "save_dir", ""), flush=True)
 
 

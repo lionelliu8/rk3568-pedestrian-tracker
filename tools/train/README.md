@@ -17,3 +17,15 @@ Python 环境用 `D:\bitpose_train\venv`（ultralytics 8.4）。
 - Python 进程做完工作后会在退出阶段卡死，持续占用 CPU，所以脚本最后用 `os._exit(0)` 强制退出。
 - 在 ssh 会话里用 Start-Process 启动的进程，会话结束时会被一起杀掉。
 - 训练机上的 Python 访问 HTTPS 不稳定，数据集要先在服务器上下载好再拷过去。
+
+冒烟测试（2026-11-06，coco128 里的 102 张行人图训练 3 轮，26 张验证）：
+
+| 模型 | person mAP50 |
+|---|---|
+| 单类别初始模型，Softmax，未训练 | 0.702 |
+| 直接换成 sigmoid，未训练 | 0.000 |
+| Softmax 训练 3 轮 | 0.697 |
+| sigmoid 训练 3 轮 | 0.448 |
+
+sigmoid 冒烟模型在板子上：YOLO26 单类别，NPU 43.6 ms，后处理 1.6 ms，没有算子在 CPU 上（`tests/detector_selftest`）。
+原版 80 类 YOLO26n 在同一测试里 NPU 92 ms，后处理 9.9 ms。
