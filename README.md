@@ -23,6 +23,7 @@ src/
               drm_display.*      DRM dumb buffer 全屏显示
   tracker/                       DeepSORT（基于上游 JackWoo0831/yolov5_deepsort_rknn）
 tests/detector_selftest.cpp      不需要摄像头的板端检测自检和测速
+tools/benchmark/                 视频测试与模型对比：板端评测、MOT17 打分、结果渲染成视频
 tools/
   export_yolo26_onnx.py          YOLO26 .pt → 适配 RKNN 的 ONNX（在训练机上运行）
   convert_yolo26_rknn.py         ONNX → INT8 RKNN，并带仿真器自检（在虚拟机 ~/rknn_venv 中运行）
@@ -65,6 +66,8 @@ cd /userdata/tracker/pedestrian-tracker
 ./run.sh --max-frames 300                  # 不显示，只打印 FPS 和各阶段耗时
 ./run.sh --class -1 --conf-threshold 0.3   # 跟踪全部 COCO 类别
 ./run.sh --detect-interval 2               # 每 2 帧检测一次，中间帧用卡尔曼预测
+./run.sh --input /userdata/tracker/testdata/MOT17-09/img1 --display   # 用录好的视频帧代替摄像头
+./run.sh --input <图片目录> --mot-output tracks.txt                     # 跟踪结果存成 MOTChallenge 格式
 ```
 
 使用 `--display` 时，`run.sh` 会先停掉桌面（weston/QDesktop），退出后再恢复；设置 `RESTORE_DESKTOP=0` 则不恢复。
@@ -83,6 +86,24 @@ frames=120 tracks=3 fps=… | ms: pre=… npu=… post=… track=… display=…
 LD_LIBRARY_PATH=lib tests/detector_selftest model/yolo26n_rk3568.rknn bus.bgr 810 1080 30
 PERF_DETAIL=1 LD_LIBRARY_PATH=lib tests/detector_selftest ...   # 打印逐层 NPU/CPU 耗时
 ```
+
+## 视频测试（不需要现场找行人）
+
+`--input` 给一个图片目录（例如 MOT17 的 `img1/`）时，按文件名顺序逐帧读取，相当于播放一段视频。
+板上已有 3 段 MOT17 公开数据：`/userdata/tracker/testdata/MOT17-{02,05,09}`（共约 240MB），
+目录里只放了图片，标注文件在虚拟机的 `~/npu3/yolo26_work/mot17/` 里。
+
+- `--display`：直接在板子屏幕上播放并显示跟踪结果
+- `--mot-output` / `--det-output`：把跟踪结果或检测结果写成 MOTChallenge 格式，拿回虚拟机后可以打分和渲染：
+  ```bash
+  tools/benchmark/score_mot.py track <gt根目录> <结果目录> --min-visibility 0.5   # MOTA / IDF1
+  tools/benchmark/score_mot.py det   <gt根目录> <结果目录> --min-visibility 0.5   # AP50 / 召回率 / 精度
+  tools/benchmark/render_tracks.py <序列目录> tracks.txt out.mp4                   # 画框生成 MP4
+  ```
+- 三个检测模型的对比（在板子上用 NPU 跑）：`tools/benchmark/eval_detectors_board.py`，结果见 `docs/BENCHMARK_20261105.md`。
+
+注意：读 1080p JPEG 要在 CPU 上解码，每帧约 85ms，这部分是读文件的测试才有的开销；接摄像头时没有。
+所以文件测试的 FPS 比实际接摄像头时低，判断性能时请看日志里 `npu/track` 这几项。
 
 ## 更换或重新训练 YOLO26 模型
 

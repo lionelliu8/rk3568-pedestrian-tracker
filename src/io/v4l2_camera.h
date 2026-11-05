@@ -11,9 +11,11 @@
 
 #include <opencv2/core.hpp>
 
+#include "frame_source.h"
+
 // Minimal V4L2 mmap capture (single- or multi-planar) that delivers BGR frames.
 // Supported pixel formats: YUYV, NV12, NV21, BGR24, RGB24.
-class V4l2Camera {
+class V4l2Camera : public FrameSource {
 public:
     // input: camera index ("0") or device path ("/dev/video-camera0").
     V4l2Camera(const std::string& input, int requested_width, int requested_height);
@@ -24,7 +26,8 @@ public:
 
     // Blocks for the next frame. Returns false if interrupted by a signal; throws on errors
     // or after 2 s without a frame.
-    bool read(cv::Mat& frame);
+    bool read(cv::Mat& frame) override;
+    bool is_live() const override { return true; }
 
     int width() const { return width_; }
     int height() const { return height_; }

@@ -32,7 +32,8 @@ float to_float(const std::string& value, const std::string& option) {
 void print_usage(const char* program) {
     std::cout
         << "Usage: " << program << " [options]\n"
-        << "  --input <index|device>     V4L2 camera index or device (default: /dev/video-camera0)\n"
+        << "  --input <index|device|dir> V4L2 camera index/device, or a directory of images\n"
+        << "                             (default: /dev/video-camera0)\n"
         << "  --model <file>             YOLO26 RKNN model\n"
         << "  --reid-model <file>        OSNet ReID RKNN model\n"
         << "  --labels <file>            class name list, one per line\n"
@@ -43,6 +44,8 @@ void print_usage(const char* program) {
         << "  --camera-width <px>        requested capture width (default: 1280)\n"
         << "  --camera-height <px>       requested capture height (default: 720)\n"
         << "  --max-frames <n>           stop after n frames, 0 = unlimited\n"
+        << "  --mot-output <file>        write tracks in MOTChallenge format\n"
+        << "  --det-output <file>        write raw detections in MOTChallenge format\n"
         << "  --no-rga                   resize on the CPU instead of RGA\n"
         << "  --display                  draw results on the DRM screen\n"
         << "  --help                     show this help\n";
@@ -73,6 +76,8 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--camera-width") o.camera_width = to_int(value(), arg);
         else if (arg == "--camera-height") o.camera_height = to_int(value(), arg);
         else if (arg == "--max-frames") o.max_frames = to_int(value(), arg);
+        else if (arg == "--mot-output") o.mot_output = value();
+        else if (arg == "--det-output") o.det_output = value();
         else if (arg == "--no-rga") o.use_rga = false;
         else if (arg == "--display") o.display = true;
         else if (arg == "--help" || arg == "-h") {

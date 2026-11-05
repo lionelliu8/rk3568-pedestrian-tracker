@@ -15,7 +15,7 @@ set(RKNN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rknn" CACHE PATH "RKNN ru
 set(RGA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rga" CACHE PATH "RGA SDK (headers + librga.so)")
 set(EIGEN3_INCLUDE_DIR "/usr/include/eigen3" CACHE PATH "Eigen3 headers (header-only)")
 
-find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc)
+find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc imgcodecs)
 find_package(Threads REQUIRED)
 
 add_library(rknnrt SHARED IMPORTED)
@@ -46,10 +46,13 @@ target_link_libraries(deepsort PUBLIC ${OpenCV_LIBS} rknnrt Threads::Threads)
 add_executable(pedestrian_tracker
     src/main.cpp
     src/app/options.cpp
+    src/app/mot_writer.cpp
     src/app/overlay.cpp
     src/detector/yolo26_detector.cpp
-    src/io/v4l2_camera.cpp
     src/io/drm_display.cpp
+    src/io/frame_source.cpp
+    src/io/image_sequence.cpp
+    src/io/v4l2_camera.cpp
 )
 target_include_directories(pedestrian_tracker PRIVATE src/app src/common src/detector src/io)
 target_compile_options(pedestrian_tracker PRIVATE -Wall -Wextra)
