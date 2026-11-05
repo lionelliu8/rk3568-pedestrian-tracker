@@ -14,6 +14,8 @@ src/detector/yolo26_detector.cpp reproduces the dropped decode step.
 Usage: python export_yolo26_onnx.py yolo26n.pt --imgsz 640 --out yolo26n_rk.onnx
 """
 import argparse
+import os
+import sys
 
 import torch
 from ultralytics import YOLO
@@ -51,7 +53,13 @@ def main():
     p.add_argument("--imgsz", type=int, default=640)
     p.add_argument("--opset", type=int, default=12)
     p.add_argument("--out", default="yolo26n_rk.onnx")
+    p.add_argument("--attention", choices=["softmax", "sigmoid"], default="softmax",
+                   help="must match the attention the weights were trained with (tools/train/attention.py)")
     a = p.parse_args()
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path[:0] = [os.path.join(here, "train"), here]  # repo layout, or files copied side by side
+    import attention
+    attention.use(a.attention)
 
     model = YOLO(a.weights).model.float().eval()
     wrapper = RawHead(model).eval()
