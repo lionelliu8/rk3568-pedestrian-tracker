@@ -50,7 +50,7 @@
 
 ```bash
 # 板子上
-/userdata/tracker/benchmark/run_all.sh          # 跟踪 09 + 三模型检测评测，结果在 benchmark/results/
+/userdata/tracker/benchmark/run_all.sh   # 即 tools/benchmark/run_all_board.sh；跟踪 09 + 三模型检测评测，结果在 benchmark/results/
 # 虚拟机上（结果拷回 ~/npu3/yolo26_work/board/results 之后）
 cd ~/npu3/yolo26_work
 ~/rknn_venv/bin/python ~/npu3/yolov5_deepsort_rknn/tools/benchmark/score_mot.py det mot17 \
