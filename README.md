@@ -1,172 +1,125 @@
-# Yolov5_DeepSORT_rknn
+# RK3568 行人检测与跟踪（YOLO26 + DeepSORT）
 
-****
-# 改动: 
+摄像头画面 → YOLO26n 检测（NPU，INT8）→ DeepSORT 跟踪（OSNet ReID 在 NPU 上，卡尔曼滤波和匈牙利匹配在 CPU 上）→ 可选 DRM 屏幕显示。
 
-## 本仓库在原仓库的基础上:
-1. 改善了边界框漂移, 完善了当图中没有目标等其他情形出现的bug, 增加了对cost matrix出现nan时的处理
-2. 加入了隔帧检测的功能. 设置方法:
-> 在`./yolov5/include/detect.h`中 将
-> `const int det_interval = 1;`改成期望的数值, 例如3, 表示每隔3帧检测一次, 这样可以**显著提升速度**. 
-> 同时, 也需要更改`./deepsort/include/deepsort.h`中`line 39`的`const int track_interval = 1; `, 数值要和检测的保持一致.
-3. 加入Re-ID多线程的功能
-> 如果您不希望使用多线程, 则在`./deepsort/src/deepsort.cpp`中`line 144`的`if (numOfDetections < 2)`
-> 改成`if (true)`  
+- 板卡：ATK-DLRK3568（Buildroot，glibc 2.35，RKNPU 驱动 0.8.2）
+- 运行时：librknnrt 2.5.0（随包附带，板子自带的 1.3.0 太旧）
+- 开发机：Ubuntu 22.04 虚拟机（用户 llx），所有源码、构建和部署都在这里进行
+- 训练机：Windows GPU 主机（用户 y，RX 7900 XT，ultralytics 8.4），只在需要训练或导出时使用
 
-
-自己使用时, 除了更改OpenCV的路径外, 要在`./include/common.h`中修改`IMG_WIDTH, IMG_HEIGHT, IMG_PAD, OBJ_CLASS_NUM`
-在`./yolov5/src/decode.cpp`中修改`LABEL_NALE_TXT_PATH`.
-****
-
-[![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg?style=flat-square)](https://github.com/RichardLitt/standard-readme)
-
-Yolov5_DeepSORT_rknn是基于瑞芯微Rockchip Neural Network(RKNN)开发的目标跟踪部署仓库，除了DeepSORT还支持SORT算法，可以根据不同的嵌入式平台选择合适的跟踪算法。本仓库中的DeepSORT在Rk3588上测试通过，SORT和ByteTrack应该在Rk3588和Rk3399Pro上都可运行。
-
-下面是我们的演示视频 具有强烈的抖动，进一步提高目标检测模型精度并且在视频无抖动情况下追踪性能应该会很Nice。
-
-<div align="center">
-  <img src="https://github.com/Zhou-sx/yolov5_Deepsort_rknn/blob/deepsort/detect.gif" width="45%" />&emsp; &emsp;<img src="https://github.com/Zhou-sx/yolov5_Deepsort_rknn/blob/deepsort/deepsort.gif" width="45%" />
-  <br/>
-  <font size=5>Detect</font>
-	&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;
-	&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;
-	&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;
-  <font size=5>DeepSORT</font>
-  <br/>
-</div>
-
-<div align="center">
-  <img src="https://github.com/Zhou-sx/yolov5_Deepsort_rknn/blob/deepsort/SORT.gif" width="45%" />&emsp; &emsp;<img src="https://github.com/Zhou-sx/yolov5_Deepsort_rknn/blob/deepsort/Bytetrack.gif" width="45%" />
-  <br/>
-  <font size=5>SORT</font>
-	&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;
-	&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;
-	&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;
-  <font size=5>Bytetrack</font>
-  <br/>
-</div>
-
-DeepSORT、SORT和ByteTrack已经上线，放在三个分支里！除了这三个算法之外，可能还会更新其他SOTA跟踪算法，多多关注~！
-
-我是野生程序猿，如果在代码编写上存在不规范的情况，请多多见谅。
-
-## 文档内容
-
-- [文件目录结构描述](#文件目录结构描述)
-- [安装及使用](#安装及使用)
-- [数据说明](#数据说明)
-- [性能测试](#性能测试)
-- [参考仓库](#参考仓库)
-
-## 文件目录结构描述
+## 目录结构
 
 ```
-├── Readme.md                   // help
-├── data						// 数据
-├── model						// 模型
-├── build
-├── CMakeLists.txt			    // 编译Yolov5_DeepSORT
-├── include						// 通用头文件
-├── src
-├── 3rdparty                    
-│   ├── linrknn_api				// rknn   动态链接库
-│   ├── rga		                // rga    动态链接库
-│   ├── opencv		            // opencv 动态链接库(自行编译并在CmakeLists.txt中设置相应路径)
-├── yolov5           			
-│   └── include
-│       └── decode.h            // 解码
-│       └── detect.h            // 推理
-│       └── videoio.h           // 视频IO
-│   └── src
-│       └── decode.cpp    
-│       └── ...
-├── deepsort
-│   └── include
-│       └── deepsort.h     		// class DeepSort
-│       └── featuretensor.h     // Reid推理
-│       └── ...
-│   └── src
-│       └── deepsort.cpp
-│       └── ...
-│   └── CMakeLists.txt			// 编译deepsort子模块
-
+CMakeLists.txt
+cmake/toolchain-rk3568.cmake     aarch64 交叉编译工具链
+src/
+  main.cpp                       主流程：采集 → 检测 → 跟踪 → 显示
+  app/        options.*          命令行参数
+              overlay.*          画框、标签、FPS
+  common/     detect_box.h       检测框/跟踪框结构
+              stopwatch.h        计时
+  detector/   yolo26_detector.*  YOLO26 RKNN 推理：letterbox 预处理（RGA 缩放）+ 解码 + NMS
+  io/         v4l2_camera.*      V4L2 mmap 采集（YUYV/NV12/NV21/BGR/RGB → BGR）
+              drm_display.*      DRM dumb buffer 全屏显示
+  tracker/                       DeepSORT（基于上游 JackWoo0831/yolov5_deepsort_rknn）
+tests/detector_selftest.cpp      不需要摄像头的板端检测自检和测速
+tools/
+  export_yolo26_onnx.py          YOLO26 .pt → 适配 RKNN 的 ONNX（在训练机上运行）
+  convert_yolo26_rknn.py         ONNX → INT8 RKNN，并带仿真器自检（在虚拟机 ~/rknn_venv 中运行）
+  convert_osnet_rk3568.py        OSNet ReID → RKNN
+  image_to_bgr.py                图片 → 自检用的原始 BGR 文件
+scripts/
+  build_opencv_rk3568.sh         编译静态 OpenCV（core + imgproc）
+  build_rk3568.sh                交叉编译并打包，产物在 dist/
+  deploy_rk3568.sh               通过 SSH 部署到板子
+  run.sh                         板端启动脚本
+model/                           yolo26n_rk3568.rknn、osnet_x0_25_market_rk3568.rknn、COCO 标签
+third_party/                     rknn（2.5.0）、rga
+docs/UPSTREAM_README.md          上游项目原始说明
 ```
 
-## 安装及使用
+## 构建
 
-+ RKNN-Toolkit
+```bash
+sudo apt install g++-aarch64-linux-gnu cmake libeigen3-dev
+scripts/build_opencv_rk3568.sh            # 只需执行一次，生成 third_party/opencv-rk3568
+scripts/build_rk3568.sh                   # 生成 dist/pedestrian-tracker-rk3568.tar.gz
+```
 
-  这个项目需要使用RKNN-Toolkit2(Rk3588)或者RKNN-Toolkit1(Rk3399Pro)，请确保librknnrt.so和rknn_server正常运行。可以先运行瑞芯微仓库中的Demo来测试。
+也可以用 `OPENCV_DIR=<目录>` 指定已有的静态 OpenCV，例如复用 6D 项目编好的：
+`OPENCV_DIR=~/6D/cross/opencv-install/lib/cmake/opencv4 scripts/build_rk3568.sh`。
 
-    ```
-    rknpu2
-    https://github.com/rockchip-linux/rknpu2
-    ```
+C++ 运行库（libstdc++/libgcc）静态链接，OpenCV 也是静态库，所以包里只需要附带 `librknnrt.so` 和 `librga.so`。
 
-+ opencv的编译安装
+## 部署与运行
 
-  可以选择直接在板子上编译，Rk3588编译速度很快，不到十分钟。
-  也可以选择交叉编译，我使用的交叉编译工具链：gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu
+```bash
+scripts/deploy_rk3568.sh root@192.168.110.166   # 解压到 /userdata/pedestrian-tracker
+```
 
-    ```
-    注意！！！
-    请根据自己的OpenCV路径修改CMakeLists.txt文件
+板端：
 
-    搜索 set(OpenCV_DIR /home/linaro/workspace/opencv/lib/cmake/opencv4)
-    将路径替换成你的OpenCVConfig.cmake所在的文件夹
+```sh
+cd /userdata/pedestrian-tracker
+./run.sh --display                         # 摄像头 /dev/video-camera0，结果画到屏幕
+./run.sh --max-frames 300                  # 不显示，只打印 FPS 和各阶段耗时
+./run.sh --class -1 --conf-threshold 0.3   # 跟踪全部 COCO 类别
+./run.sh --detect-interval 2               # 每 2 帧检测一次，中间帧用卡尔曼预测
+```
 
-    本项目中有两个CMakeLists.txt请同时修改！！！
-    ```
+使用 `--display` 时，`run.sh` 会先停掉桌面（weston/QDesktop），退出后再恢复；设置 `RESTORE_DESKTOP=0` 则不恢复。
+摄像头同一时间只能被一个程序使用，运行前要先关掉其他占用摄像头的程序（例如 bitpose 预览、系统相机）。
 
-+ DeepSort选用的模型是TorchReID中的osnet_x0_25 ，输入尺寸是256x512
+每秒输出一行，例如：
 
-  目前还没有针对于自己的数据集重新训练
+```
+frames=120 tracks=3 fps=… | ms: pre=… npu=… post=… track=… display=…
+```
 
-  ```
-  Torchreid
-  https://kaiyangzhou.github.io/deep-person-reid/MODEL_ZOO
-  ```
+不接摄像头时检查检测是否正常：
 
-+ 项目编译与运行
+```sh
+# 在虚拟机上：tools/image_to_bgr.py bus.jpg bus.bgr  → 输出 810 1080
+LD_LIBRARY_PATH=lib tests/detector_selftest model/yolo26n_rk3568.rknn bus.bgr 810 1080 30
+PERF_DETAIL=1 LD_LIBRARY_PATH=lib tests/detector_selftest ...   # 打印逐层 NPU/CPU 耗时
+```
 
-  参考Cmake的使用，会在build目录下生成可执行文件。
+## 更换或重新训练 YOLO26 模型
 
-## 数据说明
+1. 训练机（`ssh gpu`，环境 `D:\bitpose_train\venv`）：
+   ```
+   python tools/export_yolo26_onnx.py yolo26n.pt --imgsz 640 --out yolo26n_rk.onnx
+   ```
+   导出脚本会去掉检测头里的解码和 top-k，只保留 6 个原始输出（3 个尺度 × 框/类别）。
+2. 虚拟机：
+   ```
+   ~/rknn_venv/bin/python tools/convert_yolo26_rknn.py yolo26n_rk.onnx \
+       --calib <代表性图片目录> --out model/yolo26n_rk3568.rknn --check-image bus.jpg
+   ```
+   校准图片最好来自实际场景，或者用 COCO 图片；脚本会按运行时的方式做 letterbox。
+3. 重新执行 `scripts/build_rk3568.sh` 和部署。
 
-+ 使用的是红外车辆、行人数据集，自行拍摄的，暂时不公开。
+自己训练的模型如果类别不同，换掉 `model/coco_80_labels_list.txt`，并用 `--class` 指定要跟踪的类别。
+DeepSORT 的 ReID 是行人模型，跟踪行人以外的类别时 ID 稳定性会差一些。
 
-+ 测试的视频存在严重的抖动，影响了跟踪性能，不代表DeepSORT的跟踪性能。
+## 检测输出格式
 
-## 性能测试
+RKNN 模型有 1 个输入（640×640 RGB uint8，NHWC）和 6 个输出：每个步长（8/16/32）各一个
+`box (1,4,H,W)`（到锚点中心的左/上/右/下距离，单位是网格）和 `cls (1,80,H,W)`（logit）。
+C++ 端在 INT8 量化域里直接和阈值比较（不用对每个锚点算 exp），只对通过阈值的点做反量化，
+框坐标为 `(anchor ∓ dist) × stride`。YOLO26 是一对一检测头，本身不需要 NMS；
+代码里保留了一个 IoU 0.7 的轻量 NMS，用来去掉量化偶尔带来的重复框。
 
-目前只对模型速度进行了测试，首先送上瑞芯微官方的benchmark
+## 性能（板端实测，2026-11-05，bus.jpg，640×640 INT8）
 
-+ 瑞芯微rknn_model_zoo
+| 阶段 | 耗时 |
+|---|---|
+| 预处理（letterbox） | 约 10 ms（RGA 要求宽度 16 对齐，不对齐时走 CPU） |
+| NPU 推理 | 约 92 ms |
+| 后处理（80 类全扫描；只跟踪行人时更低） | 约 6–10 ms |
 
-| platform（fps）          | yolov5s-relu | yolov5s-silu | yolov5m-relu | yolov5m-silu |
-| ------------------------ | ------------ | ------------ | ------------ | ------------ |
-| rk1808 - u8              | 35.24        | 26.41        | 16.27        | 12.60        |
-| rv1109 - u8              | 19.58        | 13.33        | 8.11         | 5.45         |
-| rv1126 - u8              | 27.54        | 19.29        | 11.69        | 7.86         |
-| rk3566 - u8              | 15.16        | 10.60        | 8.65         | 6.61         |
-| rk3588 - u8(single core) | 53.73        | 33.24        | 22.31        | 14.74        |
-
-+ Ours
-
-  DeepSORT的ReID网络单次推理耗时约3ms，但是由于每个检测框都需要推理一次网络故受目标个数影响很大。SORT和ByteTrack由于没有ReID网络，在目标不是很多的情况下跟踪时间约等于目标检测，但是ID切换现象会更明显更严重一些。
-  
-| platform（ms）          | yolov5s-relu | yolov5s-relu+Deepsort |yolov5s-relu+Sort   |yolov5s-relu+ByteTrack   |
-| :-------------------------: | :--: | :--: | :--:  | :--: |
-| rk3588 - u8(single core)    | 24 |   -  |   -   |   -  |
-| rk3588 - u8(double core)    | 12 | 33.24(infulenced)| 12 | 12 |
-| rk3399Pro - u8(single core) |   -  |   -  |   -   |   -  |
-
-## 参考仓库
-
-本项目参考了大量前人的优秀工作，在最后放上一些有用的仓库链接。
-
-1. https://github.com/ultralytics/yolov5
-2. https://github.com/airockchip/rknn_model_zoo
-3. https://github.com/airockchip/librga
-4. https://github.com/RichardoMrMu/yolov5-deepsort-tensorrt
-5. https://github.com/KaiyangZhou/deep-person-reid
+`PERF_DETAIL=1` 的逐层统计显示：两个注意力层（model.10、model.22）里的 Softmax 被 RKNN 放到 CPU 上执行，
+每帧约 27 ms，占推理时间的 27%。尝试过两种等价改写（转置后对通道维做 softmax；手写 exp/max/sum），
+RKNN 2.5.0 都会把它们重新合并成 CPU Softmax，所以目前保留原结构。
+如需更快，可以把 `--imgsz` 降到 480 或 512（推理时间大致和像素数成正比，但小目标的召回率会下降），
+或者每 2 帧检测一次（`--detect-interval 2`）。
