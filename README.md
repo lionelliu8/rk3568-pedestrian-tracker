@@ -54,13 +54,13 @@ C++ 运行库（libstdc++/libgcc）静态链接，OpenCV 也是静态库，所�
 ## 部署与运行
 
 ```bash
-scripts/deploy_rk3568.sh root@192.168.110.166   # 解压到 /userdata/pedestrian-tracker
+scripts/deploy_rk3568.sh root@192.168.110.166   # 解压到 /userdata/tracker/pedestrian-tracker
 ```
 
 板端：
 
 ```sh
-cd /userdata/pedestrian-tracker
+cd /userdata/tracker/pedestrian-tracker
 ./run.sh --display                         # 摄像头 /dev/video-camera0，结果画到屏幕
 ./run.sh --max-frames 300                  # 不显示，只打印 FPS 和各阶段耗时
 ./run.sh --class -1 --conf-threshold 0.3   # 跟踪全部 COCO 类别
