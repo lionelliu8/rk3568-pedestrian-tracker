@@ -69,9 +69,17 @@ target_link_libraries(detector_selftest PRIVATE rga ${OpenCV_LIBS} rknnrt Thread
 target_link_options(detector_selftest PRIVATE -static-libstdc++ -static-libgcc)
 set_target_properties(detector_selftest PROPERTIES INSTALL_RPATH "$ORIGIN/../lib")
 
+# Per-layer timing for any RKNN model (installed as tests/rknn_perf)
+add_executable(rknn_perf tests/rknn_perf.cpp)
+target_include_directories(rknn_perf PRIVATE src/common)
+target_compile_options(rknn_perf PRIVATE -Wall -Wextra)
+target_link_libraries(rknn_perf PRIVATE rknnrt)
+target_link_options(rknn_perf PRIVATE -static-libstdc++ -static-libgcc)
+set_target_properties(rknn_perf PROPERTIES INSTALL_RPATH "$ORIGIN/../lib")
+
 # Board package layout: <prefix>/{pedestrian_tracker, run.sh, lib/, model/}
 install(TARGETS pedestrian_tracker RUNTIME DESTINATION .)
-install(TARGETS detector_selftest RUNTIME DESTINATION tests)
+install(TARGETS detector_selftest rknn_perf RUNTIME DESTINATION tests)
 install(PROGRAMS scripts/run.sh DESTINATION .)
 install(FILES README.md DESTINATION .)
 install(FILES "${RKNN_ROOT}/lib/librknnrt.so" "${RGA_ROOT}/lib/librga.so" DESTINATION lib)

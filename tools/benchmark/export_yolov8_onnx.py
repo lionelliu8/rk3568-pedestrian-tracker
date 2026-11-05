@@ -1,4 +1,4 @@
-"""Export YOLOv8 (DFL head, reg_max=16) with raw per-stride outputs, for the detector benchmark.
+"""Export YOLOv8 or YOLO11 (DFL head, reg_max=16) with raw per-stride outputs, for the detector benchmark.
 
 Outputs per stride s in (8, 16, 32): box_s (1, 64, H, W) DFL logits, cls_s (1, 80, H, W) logits.
 Usage: python export_yolov8_onnx.py yolov8n.pt --out yolov8n_rk.onnx

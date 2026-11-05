@@ -5,6 +5,7 @@ Runs on the board with rknn-toolkit-lite2 (bundled with bitpose) and librknnrt 2
 Supported model kinds (all 640x640, RGB uint8 NHWC input):
   yolo26  6 outputs: box (4,H,W) distances + cls (80,H,W) logits per stride   (NMS-free head)
   yolov8  6 outputs: box (64,H,W) DFL logits + cls (80,H,W) logits per stride
+  yolo11  same head and outputs as yolov8
   yolov5  3 outputs: (255,H,W) = 3 anchors x (xywh, obj, 80 cls), sigmoid already applied
           (Rockchip rknn_model_zoo export, the model this project used before YOLO26)
 
@@ -114,6 +115,7 @@ def nms(boxes, scores, iou_threshold, max_det=300):
 KINDS = {
     "yolo26": (lambda o, c: decode_distances(o, c, dfl=False), 0.7),
     "yolov8": (lambda o, c: decode_distances(o, c, dfl=True), 0.7),
+    "yolo11": (lambda o, c: decode_distances(o, c, dfl=True), 0.7),
     "yolov5": (decode_yolov5, 0.45),
 }
 
