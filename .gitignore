@@ -1,5 +1,8 @@
 build/*
 !build/.gitkeep
+build-rk3568*/
+deploy-rk3568/
+check*.onnx
 data/*
 !data/DJI_0001_S_cut.mp4
 !data/.gitkeep

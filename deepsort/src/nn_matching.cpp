@@ -1,4 +1,6 @@
 #include "nn_matching.h"
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 
 using namespace Eigen;
@@ -133,13 +135,14 @@ Eigen::MatrixXf
     FEATURESS aa = a;
     FEATURESS bb = b;
     if (!data_is_normalized) {
-        //undo:
         for (int i = 0; i < a.rows(); ++i) {
-            aa.row(i) =  a.row(i) / sqrt(a.row(i).squaredNorm());
+            const float norm = std::sqrt(std::max(a.row(i).squaredNorm(), 1e-12f));
+            aa.row(i) = a.row(i) / norm;
         }
         for (int i = 0; i < b.rows(); ++i) {
-            bb.row(i) =  b.row(i) / sqrt(b.row(i).squaredNorm());
-        }        
+            const float norm = std::sqrt(std::max(b.row(i).squaredNorm(), 1e-12f));
+            bb.row(i) = b.row(i) / norm;
+        }
     }
     MatrixXf res = 1. - (aa * bb.transpose()).array();
     return res;

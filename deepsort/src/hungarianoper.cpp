@@ -1,4 +1,5 @@
 #include "hungarianoper.h"
+#include <cmath>
 
 Eigen::Matrix<float, -1, 2, Eigen::RowMajor> HungarianOper::Solve(const DYNAMICM &cost_matrix) {
     int rows = cost_matrix.rows();
@@ -6,9 +7,8 @@ Eigen::Matrix<float, -1, 2, Eigen::RowMajor> HungarianOper::Solve(const DYNAMICM
     Matrix<double> matrix(rows, cols);
     for (int row = 0; row < rows; row++) {
         for (int col = 0; col < cols; col++) {
-            if (cost_matrix(row, col) != cost_matrix(row, col)) {  // nan set to const
-                // std::cout << "nan occured! \n";
-                matrix(row, col) = 0.0;
+            if (!std::isfinite(cost_matrix(row, col))) {
+                matrix(row, col) = 1e5;
             }
             else matrix(row, col) = cost_matrix(row, col);
         }
