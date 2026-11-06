@@ -34,7 +34,7 @@ void print_usage(const char* program) {
         << "Usage: " << program << " [options]\n"
         << "  --input <index|device|dir> V4L2 camera index/device, or a directory of images\n"
         << "                             (default: /dev/video-camera0)\n"
-        << "  --model <file>             YOLO26 RKNN model\n"
+        << "  --model <file>             YOLO26 RKNN model (default: model/yolo26n_person_rk3568.rknn)\n"
         << "  --reid-model <file>        OSNet ReID RKNN model\n"
         << "  --labels <file>            class name list, one per line\n"
         << "  --class <id>               class to track, -1 = all (default: 0 person)\n"
@@ -55,9 +55,9 @@ Options parse_options(int argc, char** argv) {
     namespace fs = std::filesystem;
     Options o;
     const fs::path model_dir = fs::absolute(argv[0]).parent_path() / "model";
-    o.yolo_model = (model_dir / "yolo26n_rk3568.rknn").string();
+    o.yolo_model = (model_dir / "yolo26n_person_rk3568.rknn").string();
     o.reid_model = (model_dir / "osnet_x0_25_market_rk3568.rknn").string();
-    o.labels = (model_dir / "coco_80_labels_list.txt").string();
+    o.labels = (model_dir / "person_labels.txt").string();
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];

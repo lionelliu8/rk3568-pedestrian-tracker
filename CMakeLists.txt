@@ -84,6 +84,8 @@ install(PROGRAMS scripts/run.sh DESTINATION .)
 install(FILES README.md DESTINATION .)
 install(FILES "${RKNN_ROOT}/lib/librknnrt.so" "${RGA_ROOT}/lib/librga.so" DESTINATION lib)
 install(FILES
+    model/yolo26n_person_rk3568.rknn
+    model/person_labels.txt
     model/yolo26n_rk3568.rknn
     model/osnet_x0_25_market_rk3568.rknn
     model/coco_80_labels_list.txt

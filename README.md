@@ -1,11 +1,25 @@
-# RK3568 行人检测与跟踪（YOLO26 + DeepSORT）
+# RK3568 行人检测与跟踪（YOLO26n-person + DeepSORT）
 
-摄像头画面 → YOLO26n 检测（NPU，INT8）→ DeepSORT 跟踪（OSNet ReID 在 NPU 上，卡尔曼滤波和匈牙利匹配在 CPU 上）→ 可选 DRM 屏幕显示。
+摄像头画面（或图片序列）→ YOLO26n 行人检测（NPU，INT8）→ DeepSORT 跟踪（OSNet ReID 在 NPU 上，
+卡尔曼滤波和匈牙利匹配在 CPU 上）→ 可选 DRM 屏幕显示。
+
+默认检测模型 `model/yolo26n_person_rk3568.rknn` 是在官方 YOLO26n 基础上做的两处改动：
+1. 注意力层的 Softmax 换成 **sigmoid 注意力**（RK3568 的 NPU 不支持 Softmax，原版这一步要退回 CPU）；
+2. 用行人数据（CrowdHuman + MOT17）**微调成只检测行人的单类别模型**。
+
+板端实测（MOT17 测试序列，只统计至少一半身体可见的行人，INT8）：
+
+| 模型 | NPU 推理 | 检测 AP50 | 跟踪 MOTA | 跟踪 IDF1 |
+|---|---|---|---|---|
+| 官方 YOLO26n（80 类） | 65 ms | 0.772 | 0.584 | 0.584 |
+| **YOLO26n-person（sigmoid 注意力，默认）** | **43 ms** | **0.845** | **0.656** | **0.618** |
+
+完整对比（YOLOv5s / YOLOv8n / YOLO11n / 各种改写）见 `docs/BENCHMARK_20261105.md`。
 
 - 板卡：ATK-DLRK3568（Buildroot，glibc 2.35，RKNPU 驱动 0.8.2）
 - 运行时：librknnrt 2.5.0（随包附带，板子自带的 1.3.0 太旧）
 - 开发机：Ubuntu 22.04 虚拟机（用户 llx），所有源码、构建和部署都在这里进行
-- 训练机：Windows GPU 主机（用户 y，RX 7900 XT，ultralytics 8.4），只在需要训练或导出时使用
+- 训练机：Windows GPU 主机（用户 y，RX 7900 XT，ROCm + ultralytics 8.4）
 
 ## 目录结构
 
@@ -13,30 +27,42 @@
 CMakeLists.txt
 cmake/toolchain-rk3568.cmake     aarch64 交叉编译工具链
 src/
-  main.cpp                       主流程：采集 → 检测 → 跟踪 → 显示
+  main.cpp                       主流程：读帧 → 检测 → 跟踪 → 输出/显示
   app/        options.*          命令行参数
               overlay.*          画框、标签、FPS
+              mot_writer.*       结果写成 MOTChallenge 格式
   common/     detect_box.h       检测框/跟踪框结构
               stopwatch.h        计时
-  detector/   yolo26_detector.*  YOLO26 RKNN 推理：letterbox 预处理（RGA 缩放）+ 解码 + NMS
-  io/         v4l2_camera.*      V4L2 mmap 采集（YUYV/NV12/NV21/BGR/RGB → BGR）
+  detector/   yolo26_detector.*  YOLO26 RKNN 推理：letterbox（RGA 缩放）+ INT8 域解码 + NMS，类别数自动识别
+  io/         frame_source.*     输入接口：摄像头或图片目录
+              v4l2_camera.*      V4L2 mmap 采集（YUYV/NV12/NV21/BGR/RGB → BGR）
+              image_sequence.*   按文件名顺序读取图片目录（视频测试用）
               drm_display.*      DRM dumb buffer 全屏显示
   tracker/                       DeepSORT（基于上游 JackWoo0831/yolov5_deepsort_rknn）
-tests/detector_selftest.cpp      不需要摄像头的板端检测自检和测速
-tools/benchmark/                 视频测试与模型对比：板端评测、MOT17 打分、结果渲染成视频
+tests/
+  detector_selftest.cpp          不需要摄像头的检测自检和测速
+  rknn_perf.cpp                  任意 RKNN 模型的逐层耗时（看算子在 NPU 还是 CPU 上）
 tools/
-  export_yolo26_onnx.py          YOLO26 .pt → 适配 RKNN 的 ONNX（在训练机上运行）
-  convert_yolo26_rknn.py         ONNX → INT8 RKNN，并带仿真器自检（在虚拟机 ~/rknn_venv 中运行）
+  export_yolo26_onnx.py          .pt → 适配 RKNN 的 ONNX（训练机上运行）
+  convert_yolo26_rknn.py         ONNX → INT8 RKNN，带仿真器自检（虚拟机 ~/rknn_venv）
   convert_osnet_rk3568.py        OSNet ReID → RKNN
   image_to_bgr.py                图片 → 自检用的原始 BGR 文件
+  train/                         行人微调：sigmoid 注意力、单类别初始化、数据转换、训练脚本（见其 README）
+  benchmark/                     板端多模型对比、MOT17 打分、结果渲染成视频
+  experiments/                   Softmax 改写实验、一对多检测头实验（见其 README）
 scripts/
-  build_opencv_rk3568.sh         编译静态 OpenCV（core + imgproc）
+  build_opencv_rk3568.sh         编译静态 OpenCV（core + imgproc + imgcodecs）
   build_rk3568.sh                交叉编译并打包，产物在 dist/
   deploy_rk3568.sh               通过 SSH 部署到板子
   run.sh                         板端启动脚本
-model/                           yolo26n_rk3568.rknn、osnet_x0_25_market_rk3568.rknn、COCO 标签
+model/
+  yolo26n_person_rk3568.rknn     默认：行人单类别，sigmoid 注意力
+  person_labels.txt              默认标签
+  yolo26n_rk3568.rknn            官方 YOLO26n，COCO 80 类（需要检测其他物体时用）
+  coco_80_labels_list.txt
+  osnet_x0_25_market_rk3568.rknn DeepSORT 的 ReID 模型
 third_party/                     rknn（2.5.0）、rga
-docs/UPSTREAM_README.md          上游项目原始说明
+docs/                            BENCHMARK_20261105.md（测试记录）、UPSTREAM_README.md（上游说明）
 ```
 
 ## 构建
@@ -47,10 +73,7 @@ scripts/build_opencv_rk3568.sh            # 只需执行一次，生成 third_pa
 scripts/build_rk3568.sh                   # 生成 dist/pedestrian-tracker-rk3568.tar.gz
 ```
 
-也可以用 `OPENCV_DIR=<目录>` 指定已有的静态 OpenCV，例如复用 6D 项目编好的：
-`OPENCV_DIR=~/6D/cross/opencv-install/lib/cmake/opencv4 scripts/build_rk3568.sh`。
-
-C++ 运行库（libstdc++/libgcc）静态链接，OpenCV 也是静态库，所以包里只需要附带 `librknnrt.so` 和 `librga.so`。
+C++ 运行库和 OpenCV 都是静态链接，所以包里只需要附带 `librknnrt.so` 和 `librga.so`。
 
 ## 部署与运行
 
@@ -64,83 +87,80 @@ scripts/deploy_rk3568.sh root@192.168.110.166   # 解压到 /userdata/tracker/pe
 cd /userdata/tracker/pedestrian-tracker
 ./run.sh --display                         # 摄像头 /dev/video-camera0，结果画到屏幕
 ./run.sh --max-frames 300                  # 不显示，只打印 FPS 和各阶段耗时
-./run.sh --class -1 --conf-threshold 0.3   # 跟踪全部 COCO 类别
 ./run.sh --detect-interval 2               # 每 2 帧检测一次，中间帧用卡尔曼预测
 ./run.sh --input /userdata/tracker/testdata/MOT17-09/img1 --display   # 用录好的视频帧代替摄像头
 ./run.sh --input <图片目录> --mot-output tracks.txt                     # 跟踪结果存成 MOTChallenge 格式
+# 检测行人以外的物体：换回官方 80 类模型
+./run.sh --model model/yolo26n_rk3568.rknn --labels model/coco_80_labels_list.txt --class -1
 ```
 
 使用 `--display` 时，`run.sh` 会先停掉桌面（weston/QDesktop），退出后再恢复；设置 `RESTORE_DESKTOP=0` 则不恢复。
 摄像头同一时间只能被一个程序使用，运行前要先关掉其他占用摄像头的程序（例如 bitpose 预览、系统相机）。
 
-每秒输出一行，例如：
+每秒输出一行：
 
 ```
-frames=120 tracks=3 fps=… | ms: pre=… npu=… post=… track=… display=…
+frames=120 tracks=3 fps=… | ms: read=… pre=… npu=… post=… track=… display=…
 ```
 
-不接摄像头时检查检测是否正常：
+## 性能（板端，C++ 程序，默认模型）
 
-```sh
-# 在虚拟机上：tools/image_to_bgr.py bus.jpg bus.bgr  → 输出 810 1080
-LD_LIBRARY_PATH=lib tests/detector_selftest model/yolo26n_rk3568.rknn bus.bgr 810 1080 30
-PERF_DETAIL=1 LD_LIBRARY_PATH=lib tests/detector_selftest ...   # 打印逐层 NPU/CPU 耗时
-```
+| 阶段 | 耗时 |
+|---|---|
+| 预处理（letterbox，RGA 缩放） | 2–6 ms |
+| NPU 推理 | 43 ms（全部算子在 NPU 上） |
+| 后处理（单类别） | 1.5 ms |
+| DeepSORT 跟踪 | 45–130 ms，人越多越慢（每个人要跑一次 OSNet） |
+
+接摄像头时，人少的场景约 8 FPS。现在的瓶颈是 DeepSORT 里的 ReID：人多时它比检测还慢。
+可以用 `--detect-interval 2` 减少检测和 ReID 的次数，或者换成不需要外观特征的跟踪算法（例如 ByteTrack）。
+
+读文件做测试时，CPU 要解码 JPEG（1080p 约 90 ms/帧），这部分开销接摄像头时没有。
 
 ## 视频测试（不需要现场找行人）
 
-`--input` 给一个图片目录（例如 MOT17 的 `img1/`）时，按文件名顺序逐帧读取，相当于播放一段视频。
-板上已有 3 段 MOT17 公开数据：`/userdata/tracker/testdata/MOT17-{02,05,09}`（共约 240MB），
-目录里只放了图片，标注文件在虚拟机的 `~/npu3/yolo26_work/mot17/` 里。
+`--input` 给一个图片目录时，按文件名顺序逐帧读取，相当于播放一段视频。
+板上有 3 段 MOT17 测试数据：`/userdata/tracker/testdata/MOT17-{02,05,09}`；标注在虚拟机的 `~/npu3/yolo26_work/mot17/`。
 
-- `--display`：直接在板子屏幕上播放并显示跟踪结果
-- `--mot-output` / `--det-output`：把跟踪结果或检测结果写成 MOTChallenge 格式，拿回虚拟机后可以打分和渲染：
-  ```bash
-  tools/benchmark/score_mot.py track <gt根目录> <结果目录> --min-visibility 0.5   # MOTA / IDF1
-  tools/benchmark/score_mot.py det   <gt根目录> <结果目录> --min-visibility 0.5   # AP50 / 召回率 / 精度
-  tools/benchmark/render_tracks.py <序列目录> tracks.txt out.mp4                   # 画框生成 MP4
-  ```
-- 三个检测模型的对比（在板子上用 NPU 跑）：`tools/benchmark/eval_detectors_board.py`，结果见 `docs/BENCHMARK_20261105.md`。
+```bash
+tools/benchmark/score_mot.py track <gt根目录> <结果目录> --min-visibility 0.5   # MOTA / IDF1
+tools/benchmark/score_mot.py det   <gt根目录> <结果目录> --min-visibility 0.5   # AP50 / 召回率 / 精度
+tools/benchmark/render_tracks.py <序列目录> tracks.txt out.mp4                   # 画框生成 MP4
+```
 
-注意：读 1080p JPEG 要在 CPU 上解码，每帧约 85ms，这部分是读文件的测试才有的开销；接摄像头时没有。
-所以文件测试的 FPS 比实际接摄像头时低，判断性能时请看日志里 `npu/track` 这几项。
+`--min-visibility 0.5` 只统计至少一半身体可见的人。MOT17 连几乎完全被遮挡的人也标注了，不加这个参数时所有模型的分数都会偏低。
 
-## 更换或重新训练 YOLO26 模型
+## 为什么要改注意力层
 
-1. 训练机（`ssh gpu`，环境 `D:\bitpose_train\venv`）：
-   ```
-   python tools/export_yolo26_onnx.py yolo26n.pt --imgsz 640 --out yolo26n_rk.onnx
-   ```
-   导出脚本会去掉检测头里的解码和 top-k，只保留 6 个原始输出（3 个尺度 × 框/类别）。
-2. 虚拟机：
-   ```
-   ~/rknn_venv/bin/python tools/convert_yolo26_rknn.py yolo26n_rk.onnx \
-       --calib <代表性图片目录> --out model/yolo26n_rk3568.rknn --check-image bus.jpg
-   ```
-   校准图片最好来自实际场景，或者用 COCO 图片；脚本会按运行时的方式做 letterbox。
-3. 重新执行 `scripts/build_rk3568.sh` 和部署。
+YOLO26 和 YOLO11 的注意力层里有 Softmax，RK3568 的 NPU 不支持这个算子，RKNN 会把它放到 CPU 上执行
+（YOLO26n 有 2 个，每帧约 27–43 ms；FP16 不量化也一样，说明和量化无关）。
+试过的等价改写要么被 RKNN 重新合并成 Softmax，要么在量化时溢出（见 `tools/experiments/README.md`）。
+最后的做法是改成 sigmoid 注意力：`attn = sigmoid(q·k·scale − log N)`
+（Ramapuram et al., *Theory, Analysis, and Best Practices for Sigmoid Self-Attention*, ICLR 2025）。
+它在 NPU 上只要 1.2 ms，但数学上和 Softmax 不等价，必须重新训练。和同样数据训练的 Softmax 版本相比，
+精度只低 0.005（AP50 0.845 vs 0.850），推理快 23 ms。
 
-自己训练的模型如果类别不同，换掉 `model/coco_80_labels_list.txt`，并用 `--class` 指定要跟踪的类别。
-DeepSORT 的 ReID 是行人模型，跟踪行人以外的类别时 ID 稳定性会差一些。
+## 训练（重新训练或换数据）
+
+详见 `tools/train/README.md`，流程：
+
+1. 数据：`prepare_crowdhuman.py`、`prepare_mot17.py` 转成 YOLO 格式（全身框，单类别）。
+   这次用了 CrowdHuman 15000 张 + MOT17-04/10/11/13（每 3 帧取 1 帧，共 1118 帧），验证集为 CrowdHuman val 1000 张。
+   MOT17-02/05/09 只用于测试，不能参与训练。
+2. `make_person_model.py`：从官方 yolo26n.pt 生成单类别模型，分类层直接复用 COCO 的 person 权重。
+3. `train_person.py --attention sigmoid`：100 轮，batch 32，640×640，其他是 ultralytics 默认值；
+   在 RX 7900 XT 上约 17 小时（两个版本并行）。
+4. `export_yolo26_onnx.py --attention sigmoid` 导出，`convert_yolo26_rknn.py` 转换。
+   校准图片要用行人场景（这次用 CrowdHuman val 150 张 + MOT17 训练序列 50 张）。
+
+**数据许可**：CrowdHuman 只允许非商业研究和教学使用，且图片不得再分发；MOT17 是 CC BY-NC-SA 3.0。
+所以本仓库不包含任何训练图片，用这两个数据集训练出的 `yolo26n_person_rk3568.rknn` 也只能用于非商业用途。
+商用需要换成有商用许可的数据重新训练。
 
 ## 检测输出格式
 
 RKNN 模型有 1 个输入（640×640 RGB uint8，NHWC）和 6 个输出：每个步长（8/16/32）各一个
-`box (1,4,H,W)`（到锚点中心的左/上/右/下距离，单位是网格）和 `cls (1,80,H,W)`（logit）。
+`box (1,4,H,W)`（到锚点中心的左/上/右/下距离，单位是网格）和 `cls (1,C,H,W)`（logit，C 为类别数，行人模型 C=1）。
 C++ 端在 INT8 量化域里直接和阈值比较（不用对每个锚点算 exp），只对通过阈值的点做反量化，
 框坐标为 `(anchor ∓ dist) × stride`。YOLO26 是一对一检测头，本身不需要 NMS；
 代码里保留了一个 IoU 0.7 的轻量 NMS，用来去掉量化偶尔带来的重复框。
-
-## 性能（板端实测，2026-11-05，bus.jpg，640×640 INT8）
-
-| 阶段 | 耗时 |
-|---|---|
-| 预处理（letterbox） | 约 10 ms（RGA 要求宽度 16 对齐，不对齐时走 CPU） |
-| NPU 推理 | 约 92 ms |
-| 后处理（80 类全扫描；只跟踪行人时更低） | 约 6–10 ms |
-
-`PERF_DETAIL=1` 的逐层统计显示：两个注意力层（model.10、model.22）里的 Softmax 被 RKNN 放到 CPU 上执行，
-每帧约 27 ms，占推理时间的 27%。尝试过两种等价改写（转置后对通道维做 softmax；手写 exp/max/sum），
-RKNN 2.5.0 都会把它们重新合并成 CPU Softmax，所以目前保留原结构。
-如需更快，可以把 `--imgsz` 降到 480 或 512（推理时间大致和像素数成正比，但小目标的召回率会下降），
-或者每 2 帧检测一次（`--detect-interval 2`）。

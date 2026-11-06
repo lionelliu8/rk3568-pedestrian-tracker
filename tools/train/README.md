@@ -33,3 +33,5 @@ Python 环境用 `D:\bitpose_train\venv`（ultralytics 8.4）。
 
 sigmoid 冒烟模型在板子上：YOLO26 单类别，NPU 43.6 ms，后处理 1.6 ms，没有算子在 CPU 上（`tests/detector_selftest`）。
 原版 80 类 YOLO26n 在同一测试里 NPU 92 ms，后处理 9.9 ms。
+
+正式训练结果（2026-11-06）：见 docs/BENCHMARK_20261105.md 最后一节。sigmoid 版本已成为默认模型 `model/yolo26n_person_rk3568.rknn`。

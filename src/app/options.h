@@ -5,9 +5,9 @@
 
 struct Options {
     std::string input = "/dev/video-camera0";
-    std::string yolo_model;   // default: <exe dir>/model/yolo26n_rk3568.rknn
+    std::string yolo_model;   // default: <exe dir>/model/yolo26n_person_rk3568.rknn
     std::string reid_model;   // default: <exe dir>/model/osnet_x0_25_market_rk3568.rknn
-    std::string labels;       // default: <exe dir>/model/coco_80_labels_list.txt
+    std::string labels;       // default: <exe dir>/model/person_labels.txt
     std::string mot_output;   // tracks in MOTChallenge format (optional)
     std::string det_output;   // raw detections in MOTChallenge format (optional)
     int class_filter = 0;     // COCO 0 = person; -1 = all classes
