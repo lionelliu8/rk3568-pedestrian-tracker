@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
         detector_config.class_filter = options.class_filter;
         detector_config.use_rga = options.use_rga;
         Yolo26Detector detector(options.yolo_model, detector_config);
-        DeepSort tracker(options.reid_model, options.detect_interval);
+        DeepSort tracker(options.reid_model, options.detect_interval, options.max_age, options.n_init);
         const auto labels = load_labels(options.labels);
 
         std::unique_ptr<DrmDisplay> display;

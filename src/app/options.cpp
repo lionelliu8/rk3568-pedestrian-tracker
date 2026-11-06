@@ -44,6 +44,8 @@ void print_usage(const char* program) {
         << "  --camera-width <px>        requested capture width (default: 1280)\n"
         << "  --camera-height <px>       requested capture height (default: 720)\n"
         << "  --max-frames <n>           stop after n frames, 0 = unlimited\n"
+        << "  --max-age <frames>         keep lost tracks this long for re-identification (default: 30)\n"
+        << "  --n-init <n>               detections before a new track is shown (default: 2)\n"
         << "  --mot-output <file>        write tracks in MOTChallenge format\n"
         << "  --det-output <file>        write raw detections in MOTChallenge format\n"
         << "  --no-rga                   resize on the CPU instead of RGA\n"
@@ -76,6 +78,8 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--camera-width") o.camera_width = to_int(value(), arg);
         else if (arg == "--camera-height") o.camera_height = to_int(value(), arg);
         else if (arg == "--max-frames") o.max_frames = to_int(value(), arg);
+        else if (arg == "--max-age") o.max_age = to_int(value(), arg);
+        else if (arg == "--n-init") o.n_init = to_int(value(), arg);
         else if (arg == "--mot-output") o.mot_output = value();
         else if (arg == "--det-output") o.det_output = value();
         else if (arg == "--no-rga") o.use_rga = false;
@@ -91,6 +95,7 @@ Options parse_options(int argc, char** argv) {
     if (o.class_filter < -1) throw std::invalid_argument("--class must be >= -1");
     if (o.detect_interval < 1) throw std::invalid_argument("--detect-interval must be >= 1");
     if (o.max_frames < 0) throw std::invalid_argument("--max-frames must be >= 0");
+    if (o.max_age < 1 || o.n_init < 1) throw std::invalid_argument("--max-age and --n-init must be >= 1");
     if (o.camera_width < 1 || o.camera_height < 1) throw std::invalid_argument("bad camera size");
     if (o.confidence_threshold <= 0.0f || o.confidence_threshold >= 1.0f) {
         throw std::invalid_argument("--conf-threshold must be in (0, 1)");

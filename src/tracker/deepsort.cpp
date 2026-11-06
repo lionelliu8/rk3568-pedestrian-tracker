@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <stdexcept>
 
-DeepSort::DeepSort(const std::string& model_path, int track_interval)
+DeepSort::DeepSort(const std::string& model_path, int track_interval, int max_age, int n_init)
     : track_interval_(std::max(1, track_interval)),
-      tracker_(new tracker(0.2f, 100)),
+      tracker_(new tracker(0.2f, 100, 0.7f, max_age, n_init)),
       feature_extractor_(new FeatureTensor(model_path.c_str())) {}
 
 DeepSort::~DeepSort() {

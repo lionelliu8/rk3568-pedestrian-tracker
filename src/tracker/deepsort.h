@@ -12,7 +12,9 @@
 
 class DeepSort {
 public:
-    DeepSort(const std::string& model_path, int track_interval = 1);
+    // max_age: frames a lost track is kept (it can be re-identified within this time).
+    // n_init: consecutive detections needed before a new track is reported.
+    DeepSort(const std::string& model_path, int track_interval = 1, int max_age = 30, int n_init = 2);
     ~DeepSort();
 
     DeepSort(const DeepSort&) = delete;

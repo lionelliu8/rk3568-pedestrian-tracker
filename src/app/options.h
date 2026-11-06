@@ -15,6 +15,8 @@ struct Options {
     int camera_width = 1280;
     int camera_height = 720;
     int max_frames = 0;       // 0 = unlimited
+    int max_age = 30;         // DeepSORT: frames a lost track is kept
+    int n_init = 2;           // DeepSORT: detections before a track is reported
     float confidence_threshold = 0.25f;
     float nms_threshold = 0.7f;
     bool use_rga = true;
