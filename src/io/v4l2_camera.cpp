@@ -1,6 +1,8 @@
 #include "v4l2_camera.h"
 
+#include <algorithm>
 #include <cerrno>
+#include <iterator>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -180,6 +182,24 @@ bool V4l2Camera::read(cv::Mat& frame) {
         if (xioctl(fd_, VIDIOC_DQBUF, &buffer) < 0) {
             if (errno == EAGAIN) continue;
             throw std::runtime_error("cannot dequeue camera frame");
+        }
+        // If more frames are already waiting, keep only the newest: older ones go straight back
+        // to the driver without the (expensive) colour conversion.
+        for (;;) {
+            v4l2_buffer newer{};
+            v4l2_plane newer_planes[VIDEO_MAX_PLANES]{};
+            newer.type = buffer_type_;
+            newer.memory = V4L2_MEMORY_MMAP;
+            if (buffer_type_ == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
+                newer.m.planes = newer_planes;
+                newer.length = VIDEO_MAX_PLANES;
+            }
+            if (xioctl(fd_, VIDIOC_DQBUF, &newer) < 0) break;  // EAGAIN: nothing newer
+            if (xioctl(fd_, VIDIOC_QBUF, &buffer) < 0) throw std::runtime_error("cannot requeue camera frame");
+            ++skipped_;
+            buffer = newer;
+            std::copy(std::begin(newer_planes), std::end(newer_planes), std::begin(planes));
+            if (buffer_type_ == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) buffer.m.planes = planes;
         }
         convert(buffers_.at(buffer.index).data, frame);
         if (xioctl(fd_, VIDIOC_QBUF, &buffer) < 0) {

@@ -26,8 +26,14 @@ public:
 
     // Blocks for the next frame. Returns false if interrupted by a signal; throws on errors
     // or after 2 s without a frame.
+    // Returns the newest available frame; older queued frames are skipped (see take_skipped()).
     bool read(cv::Mat& frame) override;
     bool is_live() const override { return true; }
+    int take_skipped() override {
+        const int n = skipped_;
+        skipped_ = 0;
+        return n;
+    }
 
     int width() const { return width_; }
     int height() const { return height_; }
@@ -49,6 +55,7 @@ private:
     uint32_t pixel_format_ = 0;
     v4l2_buf_type buffer_type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     bool streaming_ = false;
+    int skipped_ = 0;
     std::vector<Buffer> buffers_;
 };
 

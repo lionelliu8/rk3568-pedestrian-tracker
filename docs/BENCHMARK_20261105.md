@@ -168,3 +168,37 @@ C++ 耗时（ms/帧）：NPU 65 → 43，后处理 2 → 1.5；DeepSORT 跟踪 5
 - 瓶颈是 DeepSORT 的外观特征模型（OSNet x0.25，很小）区分不同人的能力不够。
   要明显改善遮挡后的 ID 保持，需要更强的 ReID 模型，或者换成专门处理遮挡的跟踪算法（例如 OC-SORT、BoT-SORT）。
 - 遮挡视频：Windows 桌面 `RK3568_tracker_videos/MOT17-0{2,9}occ_maxage30.mp4`。
+
+## 跟踪算法替换与提速（2026-11-07）
+
+新增 `src/mot/` 里的 ByteTrack 和 OC-SORT（按官方实现逻辑），`tools/benchmark/track_offline.cpp`
+在虚拟机上用板端记录的检测结果离线运行跟踪，便于对比和调参。
+
+参数在 MOT17-05 上选定：ByteTrack high 0.5 / new 0.6 / low 0.1（与官方默认相同）；OC-SORT det 0.3。
+MOT17-02+09（可见 ≥50%）：
+
+| 算法 | MOTA | IDF1 | IDSW | FP | FN |
+|---|---|---|---|---|---|
+| DeepSORT | 0.645 | 0.614 | 71 | 1210 | 2424 |
+| ByteTrack | **0.672** | **0.698** | **33** | 447 | 2944 |
+| OC-SORT（det 0.3） | 0.615 | 0.600 | 58 | 323 | 3634 |
+| OC-SORT（det 0.5 + BYTE） | 0.646 | 0.598 | 58 | | |
+| OC-SORT（det 0.4 + BYTE，IoU 0.2） | 0.632 | 0.611 | 87 | | |
+
+遮挡后保持 ID（全部遮挡事件）：真实遮挡 DeepSORT 51% / ByteTrack 70% / OC-SORT 53%；
+柱子/横栏 45% / 52% / 45%。三个序列整体：DeepSORT MOTA 0.656 / IDF1 0.618 → ByteTrack 0.687 / 0.705。
+
+板端提速（摄像头 1280×720）：
+
+| 步骤 | FPS | 说明 |
+|---|---|---|
+| DeepSORT，顺序处理 | 5.9–7.7 | 跟踪 83–123 ms |
+| ByteTrack，顺序处理 | 15.8 | 跟踪 0.3 ms |
+| + 三线程流水线 | 18.3 | |
+| + 只转换最新的摄像头帧 | 18.3 | 读帧 28 → 6 ms，但 NPU 仍要 54 ms |
+| + NPU 固定最高频率（run.sh） | **22** | NPU 54 → 45 ms |
+| + 屏幕显示（RGA） | 21 | 显示 9 ms（CPU 方式 46–84 ms） |
+
+另外发现原项目附带的 librga 1.6.0 与板子内核的 RGA 驱动（v2.1.0，配套库 1.3.1）不兼容，
+所有 RGA 调用都失败并退回 CPU（dmesg：`rga2: req argument is inval`）。现在改为链接板子自带的
+`/usr/lib/librga.so.2`，检测预处理 1080p 12 → 8 ms，显示 72 → 14 ms。

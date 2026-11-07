@@ -14,6 +14,13 @@
 
 #include <opencv2/imgproc.hpp>
 
+#include <cstdlib>
+#include <fstream>
+#include <string>
+
+#include <im2d.h>
+#include <rga.h>
+
 #include "posix_util.h"
 
 namespace {
@@ -117,6 +124,14 @@ DrmDisplay::DrmDisplay(const char* device) {
         if (memory_ == MAP_FAILED) throw std::runtime_error("cannot mmap DRM buffer");
         std::memset(memory_, 0, dumb_.size);
 
+        drm_prime_handle prime{};
+        prime.handle = dumb_.handle;
+        prime.flags = DRM_CLOEXEC | DRM_RDWR;
+        if (xioctl(fd_, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime) == 0) {
+            dmabuf_fd_ = prime.fd;
+            use_rga_ = std::getenv("DISPLAY_RGA") == nullptr || std::string(std::getenv("DISPLAY_RGA")) != "0";
+        }
+
         drm_mode_crtc crtc{};
         crtc.set_connectors_ptr = to_u64(&connector_id_);
         crtc.count_connectors = 1;
@@ -129,7 +144,7 @@ DrmDisplay::DrmDisplay(const char* device) {
                                      std::string(std::strerror(errno)));
         }
         std::cout << "DRM display " << device << ": " << mode_.hdisplay << 'x' << mode_.vdisplay
-                  << " connector=" << connector_id_ << "\n";
+                  << " connector=" << connector_id_ << (use_rga_ ? ", RGA" : ", CPU") << "\n";
     } catch (...) {
         release();
         throw;
@@ -151,35 +166,70 @@ void DrmDisplay::release() {
         destroy.handle = dumb_.handle;
         xioctl(fd_, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
     }
+    if (dmabuf_fd_ >= 0) close(dmabuf_fd_);
     if (fd_ >= 0) close(fd_);
 }
 
 void DrmDisplay::show(const cv::Mat& frame) {
-    cv::Mat oriented;
-    if (mode_.hdisplay < mode_.vdisplay && frame.cols > frame.rows) {
-        cv::rotate(frame, oriented, cv::ROTATE_90_CLOCKWISE);
-    } else {
-        oriented = frame;
-    }
-    const double scale = std::max(static_cast<double>(mode_.hdisplay) / oriented.cols,
-                                  static_cast<double>(mode_.vdisplay) / oriented.rows);
-    const int width = std::max(static_cast<int>(mode_.hdisplay),
-                               static_cast<int>(std::ceil(oriented.cols * scale)));
-    const int height = std::max(static_cast<int>(mode_.vdisplay),
-                                static_cast<int>(std::ceil(oriented.rows * scale)));
-    const int crop_left = (width - static_cast<int>(mode_.hdisplay)) / 2;
-    const int crop_top = (height - static_cast<int>(mode_.vdisplay)) / 2;
-    cv::Mat resized;
-    cv::resize(oriented, resized, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
+    // Portrait panel and landscape frame: rotate 90 degrees clockwise. target_w/h is the screen
+    // size seen in the frame's orientation; the frame is scaled to fill it (centre crop).
+    const bool rotate = mode_.hdisplay < mode_.vdisplay && frame.cols > frame.rows;
+    const int target_w = rotate ? mode_.vdisplay : mode_.hdisplay;
+    const int target_h = rotate ? mode_.hdisplay : mode_.vdisplay;
+    if (!(use_rga_ && show_rga(frame, rotate, target_w, target_h))) show_cpu(frame, rotate, target_w, target_h);
+    dump_once();
+}
 
+bool DrmDisplay::show_rga(const cv::Mat& frame, bool rotate, int target_w, int target_h) {
+    if (!frame.isContinuous() || frame.cols % 16 != 0) return false;  // RGA RGB888 stride alignment
+    const double scale = std::max(static_cast<double>(target_w) / frame.cols,
+                                  static_cast<double>(target_h) / frame.rows);
+    const int crop_w = std::min(frame.cols, static_cast<int>(target_w / scale)) & ~1;
+    const int crop_h = std::min(frame.rows, static_cast<int>(target_h / scale)) & ~1;
+    const im_rect src_rect{((frame.cols - crop_w) / 2) & ~1, ((frame.rows - crop_h) / 2) & ~1, crop_w, crop_h};
+    const im_rect dst_rect{0, 0, static_cast<int>(mode_.hdisplay), static_cast<int>(mode_.vdisplay)};
+    rga_buffer_t src = wrapbuffer_virtualaddr_t(frame.data, frame.cols, frame.rows, frame.cols, frame.rows,
+                                                RK_FORMAT_BGR_888);
+    // XRGB8888 scan-out = bytes B, G, R, X = RGA BGRA_8888.
+    rga_buffer_t dst = wrapbuffer_fd_t(dmabuf_fd_, mode_.hdisplay, mode_.vdisplay,
+                                       static_cast<int>(dumb_.pitch / 4), mode_.vdisplay, RK_FORMAT_BGRA_8888);
+    rga_buffer_t pat{};
+    const im_rect empty{};
+    const int usage = (rotate ? IM_HAL_TRANSFORM_ROT_90 : 0) | IM_SYNC;
+    const IM_STATUS status = improcess(src, dst, pat, src_rect, dst_rect, empty, usage);
+    if (status == IM_STATUS_SUCCESS) return true;
+    std::cerr << "display: RGA failed (" << imStrError_t(status) << "), using the CPU from now on\n";
+    use_rga_ = false;
+    return false;
+}
+
+void DrmDisplay::show_cpu(const cv::Mat& frame, bool rotate, int target_w, int target_h) {
+    // Scale down first so the remaining steps run on screen-sized images, then rotate and
+    // convert BGR -> XRGB straight into the scan-out buffer.
+    const double scale = std::max(static_cast<double>(target_w) / frame.cols,
+                                  static_cast<double>(target_h) / frame.rows);
+    const int width = std::max(target_w, static_cast<int>(std::ceil(frame.cols * scale)));
+    const int height = std::max(target_h, static_cast<int>(std::ceil(frame.rows * scale)));
+    cv::resize(frame, scaled_, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
+    const cv::Mat cropped = scaled_(cv::Rect((width - target_w) / 2, (height - target_h) / 2, target_w, target_h));
+    cv::Mat screen(mode_.vdisplay, mode_.hdisplay, CV_8UC4, memory_, dumb_.pitch);
+    if (rotate) {
+        cv::rotate(cropped, rotated_, cv::ROTATE_90_CLOCKWISE);
+        cv::cvtColor(rotated_, screen, cv::COLOR_BGR2BGRA);
+    } else {
+        cv::cvtColor(cropped, screen, cv::COLOR_BGR2BGRA);
+    }
+}
+
+void DrmDisplay::dump_once() {
+    const char* path = std::getenv("DRM_DUMP");
+    if (dumped_ || !path) return;
+    dumped_ = true;
+    std::ofstream out(path, std::ios::binary);
+    out << "P6\n" << mode_.hdisplay << ' ' << mode_.vdisplay << "\n255\n";
     for (int y = 0; y < mode_.vdisplay; ++y) {
-        uint32_t* target = reinterpret_cast<uint32_t*>(memory_ + y * dumb_.pitch);
-        const cv::Vec3b* source = resized.ptr<cv::Vec3b>(y + crop_top) + crop_left;
-        for (int x = 0; x < mode_.hdisplay; ++x) {
-            target[x] = static_cast<uint32_t>(source[x][0]) |
-                        (static_cast<uint32_t>(source[x][1]) << 8) |
-                        (static_cast<uint32_t>(source[x][2]) << 16);
-        }
+        const uint8_t* row = memory_ + y * dumb_.pitch;
+        for (int x = 0; x < mode_.hdisplay; ++x) out.put(row[4 * x + 2]).put(row[4 * x + 1]).put(row[4 * x]);
     }
 }
 

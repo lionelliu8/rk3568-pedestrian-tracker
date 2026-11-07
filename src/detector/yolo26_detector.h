@@ -24,6 +24,23 @@ struct DetectorTiming {
     double postprocess_ms = 0.0;
 };
 
+// Letterboxed network input for one frame (output of prepare()).
+struct DetectorInput {
+    cv::Mat tensor;        // RGB, model input size
+    float scale = 1.0f;    // frame -> tensor
+    int pad_x = 0;
+    int pad_y = 0;
+    cv::Size frame_size;
+    double preprocess_ms = 0.0;
+};
+
+// Raw NPU outputs for one frame (output of infer()).
+struct DetectorOutput {
+    std::vector<std::vector<int8_t>> int8;  // INT8 models
+    std::vector<std::vector<float>> fp;     // float models
+    double inference_ms = 0.0;
+};
+
 // YOLO26 detector on the RK3568 NPU.
 //
 // The RKNN model is produced by tools/export_yolo26_onnx.py + tools/convert_yolo26_rknn.py
@@ -40,6 +57,18 @@ public:
     // bgr: 8-bit BGR frame of any size. Returned boxes are in frame pixels.
     std::vector<DetectBox> detect(const cv::Mat& bgr);
 
+    // The same work in three steps, so a pipeline can run them on different threads:
+    //   prepare()  CPU/RGA letterbox    - one thread at a time
+    //   infer()    NPU                  - one thread at a time (owns the RKNN context)
+    //   decode()   CPU, read-only       - any thread
+    DetectorInput prepare(const cv::Mat& bgr);
+    DetectorOutput infer(const DetectorInput& input);
+    std::vector<DetectBox> decode(const DetectorOutput& output, const DetectorInput& input) const;
+
+    // Lowest score that decode() keeps (trackers such as ByteTrack want low-score boxes too).
+    void set_confidence_threshold(float threshold);
+    float confidence_threshold() const { return config_.confidence_threshold; }
+
     const DetectorTiming& last_timing() const { return timing_; }
     // Per-layer timing table of the last run; needs DetectorConfig::collect_perf.
     std::string perf_detail() const;
@@ -55,20 +84,12 @@ private:
         uint32_t box_index = 0;
         uint32_t cls_index = 0;
     };
-    struct Letterbox {
-        float scale = 1.0f;
-        int pad_x = 0;
-        int pad_y = 0;
-    };
-
     void load_model(const std::string& model_path);
     void resolve_outputs();
-    Letterbox preprocess(const cv::Mat& bgr);
     void resize(const cv::Mat& src, cv::Mat& dst);
     template <typename T>
-    void decode_level(const Level& level, const T* box, const T* cls, const Letterbox& letterbox,
-                      const cv::Size& frame_size, std::vector<DetectBox>& candidates) const;
-    std::vector<DetectBox> postprocess(const Letterbox& letterbox, const cv::Size& frame_size);
+    void decode_level(const Level& level, const T* box, const T* cls, const DetectorInput& input,
+                      std::vector<DetectBox>& candidates) const;
 
     DetectorConfig config_;
     DetectorTiming timing_;
@@ -79,8 +100,6 @@ private:
     int input_width_ = 0;
     int input_height_ = 0;
     int num_classes_ = 0;
-    cv::Mat resized_;
-    cv::Mat input_;  // letterboxed RGB, reused between frames
 };
 
 #endif

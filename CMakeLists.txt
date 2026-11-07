@@ -23,6 +23,8 @@ set_target_properties(rknnrt PROPERTIES
     IMPORTED_LOCATION "${RKNN_ROOT}/lib/librknnrt.so"
     INTERFACE_INCLUDE_DIRECTORIES "${RKNN_ROOT}/include")
 
+# The board's librga links libdrm; resolve it from third_party at link time.
+add_link_options("-Wl,-rpath-link,${RGA_ROOT}/lib")
 add_library(rga SHARED IMPORTED)
 set_target_properties(rga PROPERTIES
     IMPORTED_LOCATION "${RGA_ROOT}/lib/librga.so"
@@ -43,9 +45,18 @@ add_library(deepsort STATIC
 target_include_directories(deepsort PUBLIC src/tracker src/common ${EIGEN3_INCLUDE_DIR})
 target_link_libraries(deepsort PUBLIC ${OpenCV_LIBS} rknnrt Threads::Threads)
 
+add_library(mot STATIC
+    src/mot/assignment.cpp
+    src/mot/bytetrack.cpp
+    src/mot/ocsort.cpp
+)
+target_include_directories(mot PUBLIC src/mot src/common ${EIGEN3_INCLUDE_DIR})
+target_compile_options(mot PRIVATE -Wall -Wextra)
+
 add_executable(pedestrian_tracker
     src/main.cpp
     src/app/options.cpp
+    src/app/multi_tracker.cpp
     src/app/mot_writer.cpp
     src/app/overlay.cpp
     src/detector/yolo26_detector.cpp
@@ -56,7 +67,7 @@ add_executable(pedestrian_tracker
 )
 target_include_directories(pedestrian_tracker PRIVATE src/app src/common src/detector src/io)
 target_compile_options(pedestrian_tracker PRIVATE -Wall -Wextra)
-target_link_libraries(pedestrian_tracker PRIVATE deepsort rga ${OpenCV_LIBS} rknnrt Threads::Threads dl)
+target_link_libraries(pedestrian_tracker PRIVATE mot deepsort rga ${OpenCV_LIBS} rknnrt Threads::Threads dl)
 # The board's libstdc++ is older than the cross compiler's; link the C++ runtime statically.
 target_link_options(pedestrian_tracker PRIVATE -static-libstdc++ -static-libgcc)
 set_target_properties(pedestrian_tracker PROPERTIES INSTALL_RPATH "$ORIGIN/lib")
@@ -82,7 +93,9 @@ install(TARGETS pedestrian_tracker RUNTIME DESTINATION .)
 install(TARGETS detector_selftest rknn_perf RUNTIME DESTINATION tests)
 install(PROGRAMS scripts/run.sh DESTINATION .)
 install(FILES README.md DESTINATION .)
-install(FILES "${RKNN_ROOT}/lib/librknnrt.so" "${RGA_ROOT}/lib/librga.so" DESTINATION lib)
+# librga is NOT bundled: it must match the board kernel's RGA driver, so the board's own
+# /usr/lib/librga.so.2 (rga_api 1.3.1, copied into third_party/rga for linking) is used.
+install(FILES "${RKNN_ROOT}/lib/librknnrt.so" DESTINATION lib)
 install(FILES
     model/yolo26n_person_rk3568.rknn
     model/person_labels.txt

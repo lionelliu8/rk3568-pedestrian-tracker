@@ -38,14 +38,17 @@ void print_usage(const char* program) {
         << "  --reid-model <file>        OSNet ReID RKNN model\n"
         << "  --labels <file>            class name list, one per line\n"
         << "  --class <id>               class to track, -1 = all (default: 0 person)\n"
-        << "  --conf-threshold <0..1>    detection confidence (default: 0.25)\n"
+        << "  --tracker <name>           bytetrack (default), ocsort or deepsort\n"
+        << "  --conf-threshold <0..1>    score needed to start/keep a track (default: bytetrack 0.5,\n"
+        << "                             ocsort 0.3, deepsort 0.25; bytetrack also uses boxes >= 0.1)\n"
         << "  --nms-threshold <0..1>     duplicate-box IoU (default: 0.7)\n"
         << "  --detect-interval <n>      run the detector every n frames (default: 1)\n"
         << "  --camera-width <px>        requested capture width (default: 1280)\n"
         << "  --camera-height <px>       requested capture height (default: 720)\n"
         << "  --max-frames <n>           stop after n frames, 0 = unlimited\n"
-        << "  --max-age <frames>         keep lost tracks this long for re-identification (default: 30)\n"
-        << "  --n-init <n>               detections before a new track is shown (default: 2)\n"
+        << "  --max-age <frames>         keep lost tracks this long (default: 30)\n"
+        << "  --n-init <n>               deepsort: detections before a new track is shown (default: 2)\n"
+        << "  --no-pipeline              process frames one after another (for timing comparisons)\n"
         << "  --mot-output <file>        write tracks in MOTChallenge format\n"
         << "  --det-output <file>        write raw detections in MOTChallenge format\n"
         << "  --no-rga                   resize on the CPU instead of RGA\n"
@@ -78,6 +81,8 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--camera-width") o.camera_width = to_int(value(), arg);
         else if (arg == "--camera-height") o.camera_height = to_int(value(), arg);
         else if (arg == "--max-frames") o.max_frames = to_int(value(), arg);
+        else if (arg == "--tracker") o.tracker = value();
+        else if (arg == "--no-pipeline") o.pipeline = false;
         else if (arg == "--max-age") o.max_age = to_int(value(), arg);
         else if (arg == "--n-init") o.n_init = to_int(value(), arg);
         else if (arg == "--mot-output") o.mot_output = value();
@@ -97,8 +102,11 @@ Options parse_options(int argc, char** argv) {
     if (o.max_frames < 0) throw std::invalid_argument("--max-frames must be >= 0");
     if (o.max_age < 1 || o.n_init < 1) throw std::invalid_argument("--max-age and --n-init must be >= 1");
     if (o.camera_width < 1 || o.camera_height < 1) throw std::invalid_argument("bad camera size");
-    if (o.confidence_threshold <= 0.0f || o.confidence_threshold >= 1.0f) {
+    if (o.confidence_threshold != -1.0f && (o.confidence_threshold <= 0.0f || o.confidence_threshold >= 1.0f)) {
         throw std::invalid_argument("--conf-threshold must be in (0, 1)");
+    }
+    if (o.tracker != "bytetrack" && o.tracker != "ocsort" && o.tracker != "deepsort") {
+        throw std::invalid_argument("--tracker must be bytetrack, ocsort or deepsort");
     }
     if (o.nms_threshold <= 0.0f || o.nms_threshold > 1.0f) {
         throw std::invalid_argument("--nms-threshold must be in (0, 1]");

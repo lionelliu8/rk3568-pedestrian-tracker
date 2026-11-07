@@ -60,7 +60,6 @@ Yolo26Detector::Yolo26Detector(const std::string& model_path, const DetectorConf
     }
     load_model(model_path);
     resolve_outputs();
-    input_.create(input_height_, input_width_, CV_8UC3);
     std::cout << "YOLO26 model: " << input_width_ << 'x' << input_height_ << ", " << num_classes_
               << " classes, " << (int8_outputs_ ? "INT8" : "float") << " outputs\n";
 }
@@ -179,27 +178,76 @@ void Yolo26Detector::resize(const cv::Mat& src, cv::Mat& dst) {
     cv::resize(src, dst, dst.size(), 0, 0, cv::INTER_LINEAR);
 }
 
-Yolo26Detector::Letterbox Yolo26Detector::preprocess(const cv::Mat& bgr) {
-    Letterbox lb;
-    lb.scale = std::min(static_cast<float>(input_width_) / bgr.cols,
-                        static_cast<float>(input_height_) / bgr.rows);
-    const int width = std::max(1, static_cast<int>(bgr.cols * lb.scale));
-    const int height = std::max(1, static_cast<int>(bgr.rows * lb.scale));
-    lb.pad_x = (input_width_ - width) / 2;
-    lb.pad_y = (input_height_ - height) / 2;
+void Yolo26Detector::set_confidence_threshold(float threshold) {
+    if (threshold <= 0.0f || threshold >= 1.0f) throw std::invalid_argument("confidence threshold must be in (0, 1)");
+    config_.confidence_threshold = threshold;
+}
 
-    if (resized_.cols != width || resized_.rows != height) resized_.create(height, width, CV_8UC3);
-    resize(bgr, resized_);
-    input_.setTo(cv::Scalar::all(kPadValue));
-    cv::Mat roi = input_(cv::Rect(lb.pad_x, lb.pad_y, width, height));
-    cv::cvtColor(resized_, roi, cv::COLOR_BGR2RGB);
-    return lb;
+DetectorInput Yolo26Detector::prepare(const cv::Mat& bgr) {
+    if (bgr.empty() || bgr.type() != CV_8UC3) {
+        throw std::invalid_argument("YOLO26 input must be a non-empty BGR image");
+    }
+    Stopwatch watch;
+    DetectorInput in;
+    in.frame_size = bgr.size();
+    in.scale = std::min(static_cast<float>(input_width_) / bgr.cols, static_cast<float>(input_height_) / bgr.rows);
+    const int width = std::max(1, static_cast<int>(bgr.cols * in.scale));
+    const int height = std::max(1, static_cast<int>(bgr.rows * in.scale));
+    in.pad_x = (input_width_ - width) / 2;
+    in.pad_y = (input_height_ - height) / 2;
+
+    cv::Mat resized(height, width, CV_8UC3);
+    resize(bgr, resized);
+    in.tensor.create(input_height_, input_width_, CV_8UC3);
+    in.tensor.setTo(cv::Scalar::all(kPadValue));
+    cv::Mat roi = in.tensor(cv::Rect(in.pad_x, in.pad_y, width, height));
+    cv::cvtColor(resized, roi, cv::COLOR_BGR2RGB);
+    in.preprocess_ms = watch.elapsed();
+    return in;
+}
+
+DetectorOutput Yolo26Detector::infer(const DetectorInput& in) {
+    Stopwatch watch;
+    rknn_input input{};
+    input.index = 0;
+    input.type = RKNN_TENSOR_UINT8;
+    input.fmt = RKNN_TENSOR_NHWC;
+    input.size = static_cast<uint32_t>(in.tensor.total() * in.tensor.elemSize());
+    input.buf = in.tensor.data;
+    check(rknn_inputs_set(context_, 1, &input), "rknn_inputs_set(YOLO26)");
+    check(rknn_run(context_, nullptr), "rknn_run(YOLO26)");
+
+    // Outputs are written straight into our buffers (is_prealloc), so they stay valid after
+    // the next rknn_run on this thread.
+    DetectorOutput out;
+    std::vector<rknn_output> outputs(output_attrs_.size());
+    if (int8_outputs_) out.int8.resize(outputs.size());
+    else out.fp.resize(outputs.size());
+    for (uint32_t i = 0; i < outputs.size(); ++i) {
+        outputs[i].index = i;
+        outputs[i].is_prealloc = 1;
+        outputs[i].want_float = int8_outputs_ ? 0 : 1;
+        if (int8_outputs_) {
+            out.int8[i].resize(output_attrs_[i].n_elems);
+            outputs[i].buf = out.int8[i].data();
+            outputs[i].size = static_cast<uint32_t>(out.int8[i].size());
+        } else {
+            out.fp[i].resize(output_attrs_[i].n_elems);
+            outputs[i].buf = out.fp[i].data();
+            outputs[i].size = static_cast<uint32_t>(out.fp[i].size() * sizeof(float));
+        }
+    }
+    check(rknn_outputs_get(context_, static_cast<uint32_t>(outputs.size()), outputs.data(), nullptr),
+          "rknn_outputs_get(YOLO26)");
+    rknn_outputs_release(context_, static_cast<uint32_t>(outputs.size()), outputs.data());
+    out.inference_ms = watch.elapsed();
+    return out;
 }
 
 template <typename T>
 void Yolo26Detector::decode_level(const Level& level, const T* box, const T* cls,
-                                  const Letterbox& lb, const cv::Size& frame_size,
-                                  std::vector<DetectBox>& candidates) const {
+                                  const DetectorInput& lb, std::vector<DetectBox>& candidates) const {
+    const cv::Size& frame_size = lb.frame_size;
     const auto& box_attr = output_attrs_[level.box_index];
     const auto& cls_attr = output_attrs_[level.cls_index];
     // Float models use identity quantization so one code path serves both.
@@ -249,50 +297,25 @@ void Yolo26Detector::decode_level(const Level& level, const T* box, const T* cls
     }
 }
 
-std::vector<DetectBox> Yolo26Detector::postprocess(const Letterbox& lb, const cv::Size& frame_size) {
-    std::vector<rknn_output> outputs(output_attrs_.size());
-    for (uint32_t i = 0; i < outputs.size(); ++i) {
-        outputs[i].index = i;
-        outputs[i].want_float = int8_outputs_ ? 0 : 1;
-    }
-    check(rknn_outputs_get(context_, static_cast<uint32_t>(outputs.size()), outputs.data(), nullptr),
-          "rknn_outputs_get(YOLO26)");
-
+std::vector<DetectBox> Yolo26Detector::decode(const DetectorOutput& out, const DetectorInput& in) const {
     std::vector<DetectBox> candidates;
     for (const auto& level : levels_) {
-        const void* box = outputs[level.box_index].buf;
-        const void* cls = outputs[level.cls_index].buf;
         if (int8_outputs_) {
-            decode_level(level, static_cast<const int8_t*>(box), static_cast<const int8_t*>(cls), lb,
-                         frame_size, candidates);
+            decode_level(level, out.int8[level.box_index].data(), out.int8[level.cls_index].data(), in, candidates);
         } else {
-            decode_level(level, static_cast<const float*>(box), static_cast<const float*>(cls), lb,
-                         frame_size, candidates);
+            decode_level(level, out.fp[level.box_index].data(), out.fp[level.cls_index].data(), in, candidates);
         }
     }
-    rknn_outputs_release(context_, static_cast<uint32_t>(outputs.size()), outputs.data());
     return non_max_suppression(std::move(candidates), config_.nms_threshold, config_.max_detections);
 }
 
 std::vector<DetectBox> Yolo26Detector::detect(const cv::Mat& bgr) {
-    if (bgr.empty() || bgr.type() != CV_8UC3) {
-        throw std::invalid_argument("YOLO26 input must be a non-empty BGR image");
-    }
+    const DetectorInput in = prepare(bgr);
+    const DetectorOutput out = infer(in);
     Stopwatch watch;
-    const Letterbox lb = preprocess(bgr);
-    timing_.preprocess_ms = watch.lap();
-
-    rknn_input input{};
-    input.index = 0;
-    input.type = RKNN_TENSOR_UINT8;
-    input.fmt = RKNN_TENSOR_NHWC;
-    input.size = static_cast<uint32_t>(input_.total() * input_.elemSize());
-    input.buf = input_.data;
-    check(rknn_inputs_set(context_, 1, &input), "rknn_inputs_set(YOLO26)");
-    check(rknn_run(context_, nullptr), "rknn_run(YOLO26)");
-    timing_.inference_ms = watch.lap();
-
-    auto detections = postprocess(lb, bgr.size());
-    timing_.postprocess_ms = watch.lap();
+    auto detections = decode(out, in);
+    timing_.preprocess_ms = in.preprocess_ms;
+    timing_.inference_ms = out.inference_ms;
+    timing_.postprocess_ms = watch.elapsed();
     return detections;
 }

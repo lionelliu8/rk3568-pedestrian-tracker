@@ -15,9 +15,11 @@ struct Options {
     int camera_width = 1280;
     int camera_height = 720;
     int max_frames = 0;       // 0 = unlimited
-    int max_age = 30;         // DeepSORT: frames a lost track is kept
+    std::string tracker = "bytetrack";  // bytetrack | ocsort | deepsort
+    int max_age = 30;         // frames a lost track is kept
     int n_init = 2;           // DeepSORT: detections before a track is reported
-    float confidence_threshold = 0.25f;
+    float confidence_threshold = -1.0f;  // track threshold; < 0 = tracker default
+    bool pipeline = true;     // run read / NPU / tracking on separate threads
     float nms_threshold = 0.7f;
     bool use_rga = true;
     bool display = false;

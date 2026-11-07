@@ -15,6 +15,8 @@ public:
     // wait was interrupted by a signal. finished() tells the two apart.
     virtual bool read(cv::Mat& frame) = 0;
     virtual bool finished() const { return false; }
+    // Frames dropped by the source since the last call (camera frames older than the newest).
+    virtual int take_skipped() { return 0; }
     virtual bool is_live() const = 0;
 };
 

@@ -1,7 +1,8 @@
-# RK3568 行人检测与跟踪（YOLO26n-person + DeepSORT）
+# RK3568 行人检测与跟踪（YOLO26n-person + ByteTrack）
 
-摄像头画面（或图片序列）→ YOLO26n 行人检测（NPU，INT8）→ DeepSORT 跟踪（OSNet ReID 在 NPU 上，
-卡尔曼滤波和匈牙利匹配在 CPU 上）→ 可选 DRM 屏幕显示。
+摄像头画面（或图片序列）→ YOLO26n 行人检测（NPU，INT8）→ ByteTrack 跟踪（CPU，每帧约 0.3 ms）
+→ 可选屏幕显示（RGA 硬件缩放和旋转）。也可以用 `--tracker ocsort` 或 `--tracker deepsort` 切换跟踪算法。
+读帧、NPU 推理、跟踪和显示分别在三个线程上流水执行，**摄像头实时约 22 FPS，带屏幕显示约 21 FPS**。
 
 默认检测模型 `model/yolo26n_person_rk3568.rknn` 是在官方 YOLO26n 基础上做的两处改动：
 1. 注意力层的 Softmax 换成 **sigmoid 注意力**（RK3568 的 NPU 不支持 Softmax，原版这一步要退回 CPU）；
@@ -9,10 +10,11 @@
 
 板端实测（MOT17 测试序列，只统计至少一半身体可见的行人，INT8）：
 
-| 模型 | NPU 推理 | 检测 AP50 | 跟踪 MOTA | 跟踪 IDF1 |
+| 配置 | FPS | 检测 AP50 | 跟踪 MOTA | 跟踪 IDF1 |
 |---|---|---|---|---|
-| 官方 YOLO26n（80 类） | 65 ms | 0.772 | 0.584 | 0.584 |
-| **YOLO26n-person（sigmoid 注意力，默认）** | **43 ms** | **0.845** | **0.656** | **0.618** |
+| 官方 YOLO26n + DeepSORT（最初的版本） | ~7 | 0.772 | 0.584 | 0.584 |
+| YOLO26n-person + DeepSORT | ~8 | 0.845 | 0.656 | 0.618 |
+| **YOLO26n-person + ByteTrack（默认）** | **22（摄像头）** | **0.845** | **0.687** | **0.705** |
 
 完整对比（YOLOv5s / YOLOv8n / YOLO11n / 各种改写）见 `docs/BENCHMARK_20261105.md`。
 
@@ -38,6 +40,11 @@ src/
               v4l2_camera.*      V4L2 mmap 采集（YUYV/NV12/NV21/BGR/RGB → BGR）
               image_sequence.*   按文件名顺序读取图片目录（视频测试用）
               drm_display.*      DRM dumb buffer 全屏显示
+  mot/        bytetrack.*        ByteTrack（默认）
+              ocsort.*           OC-SORT
+              assignment.*       匈牙利算法、IoU
+  app/        multi_tracker.*    三种跟踪算法的统一接口（--tracker）
+  common/     bounded_queue.h    流水线线程之间的队列
   tracker/                       DeepSORT（基于上游 JackWoo0831/yolov5_deepsort_rknn）
 tests/
   detector_selftest.cpp          不需要摄像头的检测自检和测速
@@ -61,7 +68,7 @@ model/
   yolo26n_rk3568.rknn            官方 YOLO26n，COCO 80 类（需要检测其他物体时用）
   coco_80_labels_list.txt
   osnet_x0_25_market_rk3568.rknn DeepSORT 的 ReID 模型
-third_party/                     rknn（2.5.0）、rga
+third_party/                     rknn（2.5.0）；rga（板子自带的 librga 1.3.1，只用于编译，不打包）
 docs/                            BENCHMARK_20261105.md（测试记录）、UPSTREAM_README.md（上游说明）
 ```
 
@@ -73,7 +80,9 @@ scripts/build_opencv_rk3568.sh            # 只需执行一次，生成 third_pa
 scripts/build_rk3568.sh                   # 生成 dist/pedestrian-tracker-rk3568.tar.gz
 ```
 
-C++ 运行库和 OpenCV 都是静态链接，所以包里只需要附带 `librknnrt.so` 和 `librga.so`。
+C++ 运行库和 OpenCV 都是静态链接，包里只附带 `librknnrt.so`。librga 用板子自带的
+`/usr/lib/librga.so.2`：它必须和内核的 RGA 驱动版本匹配，原项目附带的 librga 1.6.0 与这块板子的驱动不兼容，
+RGA 一直调用失败、悄悄退回 CPU（2026-11-07 修复）。
 
 ## 部署与运行
 
@@ -87,13 +96,18 @@ scripts/deploy_rk3568.sh root@192.168.110.166   # 解压到 /userdata/tracker/pe
 cd /userdata/tracker/pedestrian-tracker
 ./run.sh --display                         # 摄像头 /dev/video-camera0，结果画到屏幕
 ./run.sh --max-frames 300                  # 不显示，只打印 FPS 和各阶段耗时
-./run.sh --detect-interval 2               # 每 2 帧检测一次，中间帧用卡尔曼预测
+./run.sh --tracker ocsort                  # 换成 OC-SORT（或 deepsort）
+./run.sh --conf-threshold 0.6              # ByteTrack 高分阈值（默认 0.5，新轨迹需要 +0.1）
+./run.sh --no-pipeline                     # 不用流水线，逐帧顺序处理（对比耗时用）
 ./run.sh --input /userdata/tracker/testdata/MOT17-09/img1 --display   # 用录好的视频帧代替摄像头
 ./run.sh --input <图片目录> --mot-output tracks.txt                     # 跟踪结果存成 MOTChallenge 格式
 # 检测行人以外的物体：换回官方 80 类模型
 ./run.sh --model model/yolo26n_rk3568.rknn --labels model/coco_80_labels_list.txt --class -1
 ```
 
+`run.sh` 在程序运行期间会把 NPU 频率固定在最高（运行结束后恢复原来的 `rknpu_ondemand`）。
+默认的动态调频在摄像头输入时升不上去，单帧推理要 54 ms 而不是 44 ms（18 FPS 对 22 FPS）；
+设置 `NPU_PERFORMANCE=0` 可以关闭这个行为。
 使用 `--display` 时，`run.sh` 会先停掉桌面（weston/QDesktop），退出后再恢复；设置 `RESTORE_DESKTOP=0` 则不恢复。
 摄像头同一时间只能被一个程序使用，运行前要先关掉其他占用摄像头的程序（例如 bitpose 预览、系统相机）。
 
@@ -103,19 +117,21 @@ cd /userdata/tracker/pedestrian-tracker
 frames=120 tracks=3 fps=… | ms: read=… pre=… npu=… post=… track=… display=…
 ```
 
-## 性能（板端，C++ 程序，默认模型）
+## 性能（板端实测，2026-11-07，默认模型 + ByteTrack，经 run.sh 运行）
 
-| 阶段 | 耗时 |
-|---|---|
-| 预处理（letterbox，RGA 缩放） | 2–6 ms |
-| NPU 推理 | 43 ms（全部算子在 NPU 上） |
-| 后处理（单类别） | 1.5 ms |
-| DeepSORT 跟踪 | 45–130 ms，人越多越慢（每个人要跑一次 OSNet） |
+| 输入 | FPS | NPU | 预处理 | 跟踪 | 显示 |
+|---|---|---|---|---|---|
+| 摄像头 1280×720 | **22** | 45 ms | 7 ms | 0.1 ms | — |
+| 摄像头 + 屏幕显示 | **21** | 47 ms | 8 ms | 0.1 ms | 9 ms |
+| 1080p 图片序列（MOT17-09） | 28 | 35 ms | 8 ms | 0.3 ms | — |
+| 1080p 图片序列 + 屏幕显示 | 27.5 | 36 ms | 8 ms | 0.3 ms | 14 ms |
 
-接摄像头时，人少的场景约 8 FPS。现在的瓶颈是 DeepSORT 里的 ReID：人多时它比检测还慢。
-可以用 `--detect-interval 2` 减少检测和 ReID 的次数，或者换成不需要外观特征的跟踪算法（例如 ByteTrack）。
+三个阶段并行，帧率由最慢的一段（NPU）决定，而不是各段耗时之和。
+摄像头比图片序列慢，是因为摄像头输入时 CPU 负载低、频率也低，`rknn_run` 中的 CPU 部分会变慢；
+CPU 也固定在最高频率时可以到 23 FPS，但耗电更多，默认不开。
+摄像头输入时只转换最新的一帧，NPU 忙的时候，来不及处理的帧直接还给驱动（日志里的 `dropped`）。
 
-读文件做测试时，CPU 要解码 JPEG（1080p 约 90 ms/帧），这部分开销接摄像头时没有。
+提速过程（摄像头实测）：DeepSORT 约 7 FPS → 换成 ByteTrack 15.8 → 流水线 18.3 → NPU 固定最高频率 22。
 
 ## 视频测试（不需要现场找行人）
 
@@ -139,6 +155,21 @@ YOLO26 和 YOLO11 的注意力层里有 Softmax，RK3568 的 NPU 不支持这个
 （Ramapuram et al., *Theory, Analysis, and Best Practices for Sigmoid Self-Attention*, ICLR 2025）。
 它在 NPU 上只要 1.2 ms，但数学上和 Softmax 不等价，必须重新训练。和同样数据训练的 Softmax 版本相比，
 精度只低 0.005（AP50 0.845 vs 0.850），推理快 23 ms。
+
+## 跟踪算法选择
+
+在 MOT17-05 上选参数，在 MOT17-02/09 和遮挡测试上比较（`tools/benchmark/track_offline.cpp` 离线评测，
+板端 C++ 结果与离线结果一致）。可见 ≥50%：
+
+| 算法 | MOTA | IDF1 | ID 切换 | 真实遮挡后保持 ID | 柱子遮挡后保持 ID | 跟踪耗时 |
+|---|---|---|---|---|---|---|
+| DeepSORT | 0.645 | 0.614 | 71 | 51% | 45% | 45–130 ms |
+| **ByteTrack** | **0.672** | **0.698** | **33** | **70%** | **52%** | 0.3 ms |
+| OC-SORT | 0.615 | 0.600 | 58 | 53% | 45% | 0.5 ms |
+
+OC-SORT 论文里它在 MOT17 上和 ByteTrack 基本持平（HOTA 63.2 对 63.1），明显的优势在动作非线性的 DanceTrack 上。
+这个检测模型的分数整体偏低，ByteTrack 会再用低分框（0.1–0.5）维持已有轨迹，所以对它更合适；
+OC-SORT 换了几组参数也没有超过 ByteTrack（见 `docs/BENCHMARK_20261105.md`）。
 
 ## 训练（重新训练或换数据）
 

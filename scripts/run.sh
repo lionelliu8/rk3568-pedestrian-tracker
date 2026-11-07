@@ -1,9 +1,14 @@
 #!/bin/sh
-# Board launcher. With --display the desktop is stopped so the tracker can take over the DRM
-# screen, and started again when the tracker exits.
+# Board launcher.
+# - Locks the NPU clock at its maximum while the tracker runs and restores the governor afterwards.
+#   With a camera the default rknpu_ondemand governor does not ramp the NPU up between frames:
+#   inference takes ~54 ms instead of ~44 ms (18 vs 22 FPS). NPU_PERFORMANCE=0 disables this.
+# - With --display the desktop is stopped so the tracker can take over the DRM screen, and
+#   started again when the tracker exits (RESTORE_DESKTOP=0 keeps it stopped).
 # Example: ./run.sh --input /dev/video-camera0 --display
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 export LD_LIBRARY_PATH="${ROOT}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+NPU_GOVERNOR=/sys/class/devfreq/fde40000.npu/governor
 
 display=0
 for argument in "$@"; do
@@ -16,11 +21,18 @@ if [ "${display}" = 1 ]; then
   sleep 1
 fi
 
-# Keep the shell alive on Ctrl-C so the desktop is restored; the tracker still gets the signal.
+old_governor=""
+if [ "${NPU_PERFORMANCE:-1}" = 1 ] && [ -w "${NPU_GOVERNOR}" ]; then
+  old_governor="$(cat "${NPU_GOVERNOR}")"
+  echo performance > "${NPU_GOVERNOR}"
+fi
+
+# Keep the shell alive on Ctrl-C so the settings are restored; the tracker still gets the signal.
 trap : INT TERM
 "${ROOT}/pedestrian_tracker" "$@"
 status=$?
 
+[ -n "${old_governor}" ] && echo "${old_governor}" > "${NPU_GOVERNOR}"
 if [ "${display}" = 1 ] && [ "${RESTORE_DESKTOP:-1}" = 1 ]; then
   /etc/init.d/S49weston start >/dev/null 2>&1
   /etc/init.d/S50QDesktop start >/dev/null 2>&1
