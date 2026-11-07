@@ -16,6 +16,12 @@
 
 #include <opencv2/imgproc.hpp>
 
+#include <cstdlib>
+#include <string>
+
+#include <im2d.h>
+#include <rga.h>
+
 #include "posix_util.h"
 
 namespace {
@@ -127,6 +133,12 @@ V4l2Camera::V4l2Camera(const std::string& input, int requested_width, int reques
             buffers_[i].data =
                 mmap(nullptr, length, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, offset);
             if (buffers_[i].data == MAP_FAILED) throw std::runtime_error("cannot map V4L2 buffer");
+            v4l2_exportbuffer exported{};
+            exported.type = buffer_type_;
+            exported.index = i;
+            exported.plane = 0;
+            exported.flags = O_CLOEXEC | O_RDONLY;
+            if (xioctl(fd_, VIDIOC_EXPBUF, &exported) == 0) buffers_[i].dmabuf_fd = exported.fd;
             if (xioctl(fd_, VIDIOC_QBUF, &buffer) < 0) {
                 throw std::runtime_error("cannot queue V4L2 buffer");
             }
@@ -137,8 +149,12 @@ V4l2Camera::V4l2Camera(const std::string& input, int requested_width, int reques
             throw std::runtime_error("cannot start V4L2 camera");
         }
         streaming_ = true;
+        const char* rga_env = std::getenv("CAMERA_RGA");
+        use_rga_ = (pixel_format_ == V4L2_PIX_FMT_NV12 || pixel_format_ == V4L2_PIX_FMT_NV21) &&
+                   !(rga_env && std::string(rga_env) == "0") &&
+                   std::all_of(buffers_.begin(), buffers_.end(), [](const Buffer& b) { return b.dmabuf_fd >= 0; });
         std::cout << "camera " << device_ << ": " << width_ << 'x' << height_ << ' '
-                  << fourcc(pixel_format_) << '\n';
+                  << fourcc(pixel_format_) << (use_rga_ ? ", RGA colour conversion" : "") << '\n';
     } catch (...) {
         release();
         throw;
@@ -154,6 +170,7 @@ void V4l2Camera::release() {
     }
     for (const auto& buffer : buffers_) {
         if (buffer.data != MAP_FAILED) munmap(buffer.data, buffer.length);
+        if (buffer.dmabuf_fd >= 0) close(buffer.dmabuf_fd);
     }
     if (fd_ >= 0) close(fd_);
 }
@@ -201,7 +218,7 @@ bool V4l2Camera::read(cv::Mat& frame) {
             std::copy(std::begin(newer_planes), std::end(newer_planes), std::begin(planes));
             if (buffer_type_ == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) buffer.m.planes = planes;
         }
-        convert(buffers_.at(buffer.index).data, frame);
+        convert(buffers_.at(buffer.index), frame);
         if (xioctl(fd_, VIDIOC_QBUF, &buffer) < 0) {
             throw std::runtime_error("cannot requeue camera frame");
         }
@@ -209,7 +226,23 @@ bool V4l2Camera::read(cv::Mat& frame) {
     }
 }
 
-void V4l2Camera::convert(void* data, cv::Mat& frame) const {
+bool V4l2Camera::convert_rga(const Buffer& buffer, cv::Mat& frame) {
+    if (width_ % 16 != 0 || bytes_per_line_ % 16 != 0) return false;
+    frame.create(height_, width_, CV_8UC3);
+    const int format = pixel_format_ == V4L2_PIX_FMT_NV12 ? RK_FORMAT_YCbCr_420_SP : RK_FORMAT_YCrCb_420_SP;
+    const auto src = wrapbuffer_fd_t(buffer.dmabuf_fd, width_, height_, static_cast<int>(bytes_per_line_), height_, format);
+    const auto dst = wrapbuffer_virtualaddr_t(frame.data, width_, height_, width_, height_, RK_FORMAT_BGR_888);
+    // BT.601 limited range, the same conversion OpenCV's COLOR_YUV2BGR_NV12 uses.
+    const IM_STATUS status = imcvtcolor_t(src, dst, format, RK_FORMAT_BGR_888, IM_YUV_TO_RGB_BT601_LIMIT, 1);
+    if (status == IM_STATUS_SUCCESS) return true;
+    std::cerr << "camera: RGA colour conversion failed (" << imStrError_t(status) << "), using the CPU\n";
+    use_rga_ = false;
+    return false;
+}
+
+void V4l2Camera::convert(const Buffer& buffer, cv::Mat& frame) {
+    if (use_rga_ && convert_rga(buffer, frame)) return;
+    void* data = buffer.data;
     if (pixel_format_ == V4L2_PIX_FMT_YUYV) {
         const cv::Mat source(height_, width_, CV_8UC2, data, bytes_per_line_);
         cv::cvtColor(source, frame, cv::COLOR_YUV2BGR_YUY2);

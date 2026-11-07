@@ -183,6 +183,28 @@ void Yolo26Detector::set_confidence_threshold(float threshold) {
     config_.confidence_threshold = threshold;
 }
 
+// One RGA call: scale the BGR frame, convert to RGB and write it into the letterbox area of the
+// tensor. Returns false (CPU path) when RGA is off, fails, or the sizes do not meet its
+// alignment rules (RGB888 strides must be multiples of 16 pixels, rectangles even).
+bool Yolo26Detector::letterbox_rga(const cv::Mat& bgr, DetectorInput& in, int width, int height) {
+    if (!config_.use_rga || !bgr.isContinuous() || bgr.cols % 16 != 0 || input_width_ % 16 != 0 ||
+        (in.pad_x | in.pad_y | width | height) & 1) {
+        return false;
+    }
+    const auto src = wrapbuffer_virtualaddr_t(bgr.data, bgr.cols, bgr.rows, bgr.cols, bgr.rows, RK_FORMAT_BGR_888);
+    const auto dst = wrapbuffer_virtualaddr_t(in.tensor.data, input_width_, input_height_, input_width_,
+                                              input_height_, RK_FORMAT_RGB_888);
+    rga_buffer_t pat{};
+    const im_rect src_rect{0, 0, bgr.cols, bgr.rows};
+    const im_rect dst_rect{in.pad_x, in.pad_y, width, height};
+    const im_rect empty{};
+    const IM_STATUS status = improcess(src, dst, pat, src_rect, dst_rect, empty, IM_SYNC);
+    if (status == IM_STATUS_SUCCESS) return true;
+    std::cerr << "RGA letterbox failed (" << imStrError_t(status) << "), using the CPU from now on\n";
+    config_.use_rga = false;
+    return false;
+}
+
 DetectorInput Yolo26Detector::prepare(const cv::Mat& bgr) {
     if (bgr.empty() || bgr.type() != CV_8UC3) {
         throw std::invalid_argument("YOLO26 input must be a non-empty BGR image");
@@ -196,12 +218,14 @@ DetectorInput Yolo26Detector::prepare(const cv::Mat& bgr) {
     in.pad_x = (input_width_ - width) / 2;
     in.pad_y = (input_height_ - height) / 2;
 
-    cv::Mat resized(height, width, CV_8UC3);
-    resize(bgr, resized);
     in.tensor.create(input_height_, input_width_, CV_8UC3);
-    in.tensor.setTo(cv::Scalar::all(kPadValue));
-    cv::Mat roi = in.tensor(cv::Rect(in.pad_x, in.pad_y, width, height));
-    cv::cvtColor(resized, roi, cv::COLOR_BGR2RGB);
+    in.tensor.setTo(cv::Scalar::all(kPadValue));  // grey borders: a 1.2 MB memset
+    if (!letterbox_rga(bgr, in, width, height)) {
+        cv::Mat resized(height, width, CV_8UC3);
+        resize(bgr, resized);
+        cv::Mat roi = in.tensor(cv::Rect(in.pad_x, in.pad_y, width, height));
+        cv::cvtColor(resized, roi, cv::COLOR_BGR2RGB);
+    }
     in.preprocess_ms = watch.elapsed();
     return in;
 }

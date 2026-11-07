@@ -87,6 +87,7 @@ private:
     void load_model(const std::string& model_path);
     void resolve_outputs();
     void resize(const cv::Mat& src, cv::Mat& dst);
+    bool letterbox_rga(const cv::Mat& bgr, DetectorInput& in, int width, int height);
     template <typename T>
     void decode_level(const Level& level, const T* box, const T* cls, const DetectorInput& input,
                       std::vector<DetectBox>& candidates) const;

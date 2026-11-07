@@ -42,9 +42,11 @@ private:
     struct Buffer {
         void* data = MAP_FAILED;
         std::size_t length = 0;
+        int dmabuf_fd = -1;  // exported for RGA (VIDIOC_EXPBUF)
     };
 
-    void convert(void* data, cv::Mat& frame) const;
+    void convert(const Buffer& buffer, cv::Mat& frame);
+    bool convert_rga(const Buffer& buffer, cv::Mat& frame);
     void release();
 
     std::string device_;
@@ -56,6 +58,7 @@ private:
     v4l2_buf_type buffer_type_ = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     bool streaming_ = false;
     int skipped_ = 0;
+    bool use_rga_ = false;  // NV12/NV21 -> BGR on RGA (CAMERA_RGA=0 disables)
     std::vector<Buffer> buffers_;
 };
 
