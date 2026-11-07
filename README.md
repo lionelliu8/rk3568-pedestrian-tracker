@@ -2,7 +2,7 @@
 
 摄像头画面（或图片序列）→ YOLO26n 行人检测（NPU，INT8）→ ByteTrack 跟踪（CPU，每帧约 0.3 ms）
 → 可选屏幕显示（RGA 硬件缩放和旋转）。也可以用 `--tracker ocsort` 或 `--tracker deepsort` 切换跟踪算法。
-读帧、NPU 推理、跟踪和显示分别在三个线程上流水执行，**摄像头实时约 22 FPS，带屏幕显示约 21 FPS**。
+读帧、NPU 推理、跟踪和显示分别在三个线程上流水执行，图像的缩放/颜色转换/旋转全部交给 RGA，**摄像头实时约 24 FPS**。
 
 默认检测模型 `model/yolo26n_person_rk3568.rknn` 是在官方 YOLO26n 基础上做的两处改动：
 1. 注意力层的 Softmax 换成 **sigmoid 注意力**（RK3568 的 NPU 不支持 Softmax，原版这一步要退回 CPU）；
@@ -14,7 +14,7 @@
 |---|---|---|---|---|
 | 官方 YOLO26n + DeepSORT（最初的版本） | ~7 | 0.772 | 0.584 | 0.584 |
 | YOLO26n-person + DeepSORT | ~8 | 0.845 | 0.656 | 0.618 |
-| **YOLO26n-person + ByteTrack（默认）** | **22（摄像头）** | **0.845** | **0.687** | **0.705** |
+| **YOLO26n-person + ByteTrack（默认）** | **24（摄像头）** | **0.845** | **0.687** | **0.705** |
 
 完整对比（YOLOv5s / YOLOv8n / YOLO11n / 各种改写）见 `docs/BENCHMARK_20261105.md`。
 
@@ -105,9 +105,10 @@ cd /userdata/tracker/pedestrian-tracker
 ./run.sh --model model/yolo26n_rk3568.rknn --labels model/coco_80_labels_list.txt --class -1
 ```
 
-`run.sh` 在程序运行期间会把 NPU 频率固定在最高（运行结束后恢复原来的 `rknpu_ondemand`）。
-默认的动态调频在摄像头输入时升不上去，单帧推理要 54 ms 而不是 44 ms（18 FPS 对 22 FPS）；
-设置 `NPU_PERFORMANCE=0` 可以关闭这个行为。
+`run.sh` 在程序运行期间把 NPU（900 MHz）和 CPU（1.99 GHz）都固定在最高频率，退出后恢复原来的
+`rknpu_ondemand` / `interactive`。默认的动态调频在摄像头输入时升不上去：NPU 单帧要 50 ms 而不是 41 ms。
+`NPU_PERFORMANCE=0`、`CPU_PERFORMANCE=0` 分别关闭。连续运行 5 分钟芯片温度稳定在约 71°C，
+低于 75°C 的降频阈值（室温下、无散热片实测；装进封闭外壳时建议加散热片）。
 使用 `--display` 时，`run.sh` 会先停掉桌面（weston/QDesktop），退出后再恢复；设置 `RESTORE_DESKTOP=0` 则不恢复。
 摄像头同一时间只能被一个程序使用，运行前要先关掉其他占用摄像头的程序（例如 bitpose 预览、系统相机）。
 
@@ -121,17 +122,16 @@ frames=120 tracks=3 fps=… | ms: read=… pre=… npu=… post=… track=… di
 
 | 输入 | FPS | NPU | 预处理 | 跟踪 | 显示 |
 |---|---|---|---|---|---|
-| 摄像头 1280×720 | **22** | 45 ms | 7 ms | 0.1 ms | — |
-| 摄像头 + 屏幕显示 | **21** | 47 ms | 8 ms | 0.1 ms | 9 ms |
+| 摄像头 1280×720 | **24** | 41 ms | 3.6 ms | 0.1 ms | — |
+| 摄像头 + 屏幕显示 | 约 21–24 | | | | 9 ms |
 | 1080p 图片序列（MOT17-09） | 28 | 35 ms | 8 ms | 0.3 ms | — |
 | 1080p 图片序列 + 屏幕显示 | 27.5 | 36 ms | 8 ms | 0.3 ms | 14 ms |
 
-三个阶段并行，帧率由最慢的一段（NPU）决定，而不是各段耗时之和。
-摄像头比图片序列慢，是因为摄像头输入时 CPU 负载低、频率也低，`rknn_run` 中的 CPU 部分会变慢；
-CPU 也固定在最高频率时可以到 23 FPS，但耗电更多，默认不开。
-摄像头输入时只转换最新的一帧，NPU 忙的时候，来不及处理的帧直接还给驱动（日志里的 `dropped`）。
+三个阶段并行，帧率由最慢的一段（NPU）决定。CPU 上只剩：取摄像头帧、填灰边、`rknn_run` 里驱动/数据搬运那部分、
+解码检测框、ByteTrack、画框。像素处理（摄像头 NV12→BGR、缩放 + BGR→RGB + 放进 640×640、屏幕缩放旋转）都在 RGA 上。
+摄像头输入时只转换最新的一帧，来不及处理的帧直接还给驱动（日志里的 `dropped`）。
 
-提速过程（摄像头实测）：DeepSORT 约 7 FPS → 换成 ByteTrack 15.8 → 流水线 18.3 → NPU 固定最高频率 22。
+提速过程（摄像头）：DeepSORT 7 → ByteTrack 15.8 → 流水线 18.3 → NPU 固定最高频率 22 → RGA 颜色转换 + CPU 固定最高频率 24。
 
 ## 视频测试（不需要现场找行人）
 
